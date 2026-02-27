@@ -1,4 +1,4 @@
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents, ZoomControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap, useMapEvents, ZoomControl } from 'react-leaflet';
 import { useEffect, useState } from 'react';
 import L from 'leaflet';
 import type { TransportMode } from '../App';
@@ -222,6 +222,7 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
                     opacity={0.9}
                     lineCap="round"
                     lineJoin="round"
+                    className="route-line-animated"
                   />
                 )}
 
@@ -234,7 +235,7 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
                   lineCap="round"
                 />
 
-                {/* Intermediate stop dots */}
+                {/* Intermediate stop dots — with hover tooltip */}
                 {route.pathStops?.slice(1, -1).map((stop: any, i: number) => (
                   <Marker
                     key={`mid-${stop.id}-${i}`}
@@ -252,11 +253,14 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
                       iconAnchor: [4, 4],
                     })}
                   >
+                    <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>{stop.name}</span>
+                    </Tooltip>
                     <Popup>{stop.name}</Popup>
                   </Marker>
                 ))}
 
-                {/* Board/alight markers — large white ring */}
+                {/* Board/alight markers — large white ring, hover tooltip */}
                 {[route.originStop, route.destStop].map((stop: any, i: number) => (
                   <Marker
                     key={`${stop.id}-${i}`}
@@ -274,6 +278,11 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
                       iconAnchor: [7, 7],
                     })}
                   >
+                    <Tooltip direction="top" offset={[0, -10]} opacity={0.95} permanent={false}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>
+                        {i === 0 ? '🛑 Abordaje' : '📍 Bajada'}: {stop.name}
+                      </span>
+                    </Tooltip>
                     <Popup>{stop.name}</Popup>
                   </Marker>
                 ))}

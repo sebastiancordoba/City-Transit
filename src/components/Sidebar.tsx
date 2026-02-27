@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   MapPin, Navigation, Bus, Footprints, ArrowRight, X,
-  Info, ArrowUpDown, Car, Bike, TramFront, Search, ChevronDown, ChevronUp,
-  CornerUpRight, CornerUpLeft, MoveRight, CircleDot, Milestone, Flag, RotateCcw, List, ChevronRight
+  Info, ArrowUpDown, Car, Bike, TramFront, Search, ChevronDown,
+  ChevronUp, CornerUpRight, CornerUpLeft, MoveRight, CircleDot,
+  Milestone, Flag, RotateCcw, List, ChevronRight, LocateFixed, Clock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { TransportMode } from '../App';
@@ -20,6 +21,7 @@ interface SidebarProps {
   onClear: () => void;
   onSwap?: () => void;
   onSelectPlace?: (lat: number, lng: number, label: string, field: 'origin' | 'destination') => void;
+  onClearField?: (field: 'origin' | 'destination') => void;
 }
 
 const MODES: { id: TransportMode; label: string; Icon: any; color: string; bg: string; activeText: string }[] = [
@@ -39,6 +41,11 @@ function formatDuration(s: number) {
   if (!s) return '—';
   const min = Math.round(s / 60);
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)}h ${min % 60}min`;
+}
+function arrivalTime(durationSec: number): string {
+  const now = new Date();
+  now.setSeconds(now.getSeconds() + durationSec);
+  return now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 function InstructionIcon({ icon }: { icon: string }) {
@@ -61,9 +68,12 @@ interface PlaceSearchProps {
   placeholder: string;
   value: string;
   onSelect: (lat: number, lng: number, label: string) => void;
+  onClear?: () => void;
+  onLocate?: () => void;
+  showLocate?: boolean;
 }
 
-function PlaceSearchInput({ placeholder, value, onSelect }: PlaceSearchProps) {
+function PlaceSearchInput({ placeholder, value, onSelect, onClear, onLocate, showLocate }: PlaceSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
@@ -80,7 +90,6 @@ function PlaceSearchInput({ placeholder, value, onSelect }: PlaceSearchProps) {
     } catch { setResults([]); }
     finally { setSearching(false); }
   };
-
   const onType = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value; setQuery(v); setOpen(true);
     clearTimeout(timer.current); timer.current = setTimeout(() => doSearch(v), 400);
@@ -90,36 +99,59 @@ function PlaceSearchInput({ placeholder, value, onSelect }: PlaceSearchProps) {
     setQuery(label); setResults([]); setOpen(false);
     onSelect(parseFloat(item.lat), parseFloat(item.lon), label);
   };
+  const handleClear = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setQuery(''); setResults([]); setOpen(false);
+    onClear?.();
+  };
 
   const display = query || value;
+  const hasValue = Boolean(display);
 
   return (
-    <div className="relative flex-1 min-w-0">
-      <input
-        type="text" placeholder={placeholder} value={display}
-        onChange={onType}
-        onFocus={() => { setQuery(''); setOpen(true); }}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        className="w-full bg-gray-50 border-none rounded-xl py-2.5 pl-3.5 pr-8 text-[13px] font-semibold text-gray-700 placeholder:text-gray-400 placeholder:font-normal outline-none"
-      />
-      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
-        {searching
-          ? <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
-          : <Search className="w-3.5 h-3.5 text-gray-300" />}
-      </div>
-      {open && results.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-1 z-[2000] bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden max-h-52 overflow-y-auto">
-          {results.map((item: any) => (
-            <button key={item.place_id} onMouseDown={() => pick(item)}
-              className="w-full text-left px-3.5 py-2.5 hover:bg-gray-50 transition-colors flex items-start gap-2.5 border-b border-gray-50 last:border-0">
-              <MapPin className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
-              <div className="min-w-0">
-                <p className="text-[12px] font-semibold text-gray-800 truncate">{item.display_name.split(',')[0]}</p>
-                <p className="text-[10px] text-gray-400 truncate">{item.display_name.split(',').slice(1, 3).join(',')}</p>
-              </div>
+    <div className="relative flex-1 min-w-0 flex items-center gap-1.5">
+      <div className="relative flex-1 min-w-0">
+        <input
+          type="text" placeholder={placeholder} value={display}
+          onChange={onType}
+          onFocus={() => { setQuery(''); setOpen(true); }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          className="w-full bg-gray-50 border-none rounded-xl py-2.5 pl-3.5 pr-8 text-[13px] font-semibold text-gray-700 placeholder:text-gray-400 placeholder:font-normal outline-none"
+        />
+        {/* Clear or search icon */}
+        <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+          {hasValue ? (
+            <button onClick={handleClear} className="text-gray-300 hover:text-rose-400 transition-colors p-0.5 rounded-full -mr-0.5">
+              <X className="w-3.5 h-3.5" />
             </button>
-          ))}
+          ) : searching ? (
+            <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin pointer-events-none" />
+          ) : (
+            <Search className="w-3.5 h-3.5 text-gray-300 pointer-events-none" />
+          )}
         </div>
+        {open && results.length > 0 && (
+          <div className="absolute left-0 right-0 top-full mt-1 z-[2000] bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden max-h-52 overflow-y-auto">
+            {results.map((item: any) => (
+              <button key={item.place_id} onMouseDown={() => pick(item)}
+                className="w-full text-left px-3.5 py-2.5 hover:bg-gray-50 transition-colors flex items-start gap-2.5 border-b border-gray-50 last:border-0">
+                <MapPin className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-[12px] font-semibold text-gray-800 truncate">{item.display_name.split(',')[0]}</p>
+                  <p className="text-[10px] text-gray-400 truncate">{item.display_name.split(',').slice(1, 3).join(',')}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* GPS locate button — only on origin */}
+      {showLocate && (
+        <button onClick={onLocate}
+          className="shrink-0 w-8 h-8 flex items-center justify-center rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-500 active:scale-90 transition-all"
+          title="Usar mi ubicación">
+          <LocateFixed className="w-4 h-4" />
+        </button>
       )}
     </div>
   );
@@ -153,7 +185,6 @@ function RouteBrowser() {
         </div>
         {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
       </button>
-
       <AnimatePresence>
         {open && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
@@ -185,30 +216,25 @@ function RouteBrowser() {
   );
 }
 
-// ── Mobile drag-handle component ────────────────────────────────────────────
-// On mobile the panel is a bottom sheet with three states: peek, half, full
 type SheetState = 'peek' | 'half' | 'full';
 const SHEET_HEIGHT: Record<SheetState, string> = {
-  peek: '180px',
-  half: '55vh',
-  full: '92vh',
+  peek: '180px', half: '55vh', full: '92vh',
 };
 
 // ── Main Sidebar ───────────────────────────────────────────────────────────
 export default function Sidebar({
   origin, destination, route, loading, error,
-  mode, onModeChange, onFindRoute, onClear, onSwap, onSelectPlace
+  mode, onModeChange, onFindRoute, onClear, onSwap, onSelectPlace, onClearField
 }: SidebarProps) {
   const activeMode = MODES.find(m => m.id === mode)!;
   const [originLabel, setOriginLabel] = useState('');
   const [destLabel, setDestLabel] = useState('');
   const [sheet, setSheet] = useState<SheetState>('peek');
+  const [gpsLoading, setGpsLoading] = useState(false);
 
   useEffect(() => { if (!origin) setOriginLabel(''); }, [origin]);
   useEffect(() => { if (!destination) setDestLabel(''); }, [destination]);
-  // When a route appears, expand sheet to show it
   useEffect(() => { if (route) setSheet('half'); }, [route]);
-  // When inputs are being set, half-expand
   useEffect(() => { if (origin || destination) setSheet('half'); }, [origin, destination]);
 
   const handleOrigin = (lat: number, lng: number, label: string) => {
@@ -217,6 +243,27 @@ export default function Sidebar({
   const handleDest = (lat: number, lng: number, label: string) => {
     setDestLabel(label); onSelectPlace?.(lat, lng, label, 'destination');
   };
+  const handleClearOrigin = () => { setOriginLabel(''); onClearField?.('origin'); };
+  const handleClearDest = () => { setDestLabel(''); onClearField?.('destination'); };
+
+  // GPS geolocation for origin
+  const handleLocate = () => {
+    if (!navigator.geolocation) return;
+    setGpsLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        setGpsLoading(false);
+        const { latitude, longitude } = pos.coords;
+        setOriginLabel('Mi ubicación');
+        onSelectPlace?.(latitude, longitude, 'Mi ubicación', 'origin');
+      },
+      () => setGpsLoading(false),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
+
+  // Determine the accent color for route result
+  const resultColor = route?.routeColor || activeMode.color;
 
   const inputPanel = (
     <div className="glass-panel p-4 rounded-3xl shadow-2xl pointer-events-auto border-none bg-white/96">
@@ -231,19 +278,26 @@ export default function Sidebar({
             placeholder="Busca o toca el mapa (origen)"
             value={origin ? (originLabel || `${origin[0].toFixed(5)}, ${origin[1].toFixed(5)}`) : ''}
             onSelect={handleOrigin}
+            onClear={handleClearOrigin}
+            onLocate={handleLocate}
+            showLocate
           />
           <PlaceSearchInput
             placeholder="Busca o toca el mapa (destino)"
             value={destination ? (destLabel || `${destination[0].toFixed(5)}, ${destination[1].toFixed(5)}`) : ''}
             onSelect={handleDest}
+            onClear={handleClearDest}
           />
         </div>
         <div className="flex flex-col gap-2 mt-1 shrink-0">
-          <button onClick={onSwap} className="p-2 hover:bg-gray-100 rounded-full transition-all text-gray-400 hover:text-blue-600 active:scale-90" title="Intercambiar">
-            <ArrowUpDown className="w-4 h-4" />
-          </button>
-          {(origin || destination) && (
-            <button onClick={onClear} className="p-2 hover:bg-rose-50 rounded-full transition-all text-gray-400 hover:text-rose-500 active:scale-90" title="Limpiar">
+          {gpsLoading && <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin mx-auto mt-2" />}
+          {!gpsLoading && (
+            <button onClick={onSwap} className="p-2 hover:bg-gray-100 rounded-full transition-all text-gray-400 hover:text-blue-600 active:scale-90" title="Intercambiar">
+              <ArrowUpDown className="w-4 h-4" />
+            </button>
+          )}
+          {(origin && destination) && (
+            <button onClick={onClear} className="p-2 hover:bg-rose-50 rounded-full transition-all text-gray-400 hover:text-rose-500 active:scale-90" title="Limpiar todo">
               <X className="w-4 h-4" />
             </button>
           )}
@@ -252,26 +306,36 @@ export default function Sidebar({
 
       {/* Mode tabs */}
       <div className="grid grid-cols-4 gap-1.5 mb-3">
-        {MODES.map(({ id, label, Icon }) => (
-          <button key={id} onClick={() => onModeChange(id)}
-            className={`flex flex-col items-center gap-1 py-2.5 px-1 rounded-2xl text-[11px] font-bold transition-all active:scale-95 ${mode === id ? `${MODES.find(m => m.id === id)!.bg} ${MODES.find(m => m.id === id)!.activeText} shadow-sm` : 'text-gray-400 hover:bg-gray-50'
-              }`}>
-            <Icon className="w-4 h-4" />
-            {label}
-          </button>
-        ))}
+        {MODES.map(({ id, label, Icon }) => {
+          const m = MODES.find(m => m.id === id)!;
+          return (
+            <button key={id} onClick={() => onModeChange(id)}
+              className={`flex flex-col items-center gap-1 py-2.5 px-1 rounded-2xl text-[11px] font-bold transition-all active:scale-95 ${mode === id ? `${m.bg} ${m.activeText} shadow-sm` : 'text-gray-400 hover:bg-gray-50'
+                }`}>
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          );
+        })}
       </div>
 
-      {!route && origin && destination && (
-        <button onClick={onFindRoute} disabled={loading}
+      {/* Loading indicator (auto-search) */}
+      {loading && (
+        <div className="flex items-center gap-2 py-3 justify-center">
+          <div className="w-4 h-4 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
+          <span className="text-[12px] text-gray-400 font-medium">Buscando ruta…</span>
+        </div>
+      )}
+
+      {/* Manual re-search button — only shows when no auto-search is pending */}
+      {!loading && !route && origin && destination && (
+        <button onClick={onFindRoute}
           className="w-full text-white font-black py-3.5 px-4 rounded-2xl shadow-lg transition-all active:scale-[0.98] flex justify-center items-center gap-2 text-[14px]"
           style={{
-            background: loading ? '#9ca3af' : `linear-gradient(135deg, ${activeMode.color}dd, ${activeMode.color})`,
+            background: `linear-gradient(135deg, ${activeMode.color}dd, ${activeMode.color})`,
             boxShadow: `0 8px 20px ${activeMode.color}40`,
           }}>
-          {loading
-            ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            : <><activeMode.Icon className="w-4 h-4" />Buscar ruta<ArrowRight className="w-4 h-4" /></>}
+          <activeMode.Icon className="w-4 h-4" />Buscar ruta<ArrowRight className="w-4 h-4" />
         </button>
       )}
     </div>
@@ -284,22 +348,30 @@ export default function Sidebar({
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1.5">
-              <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: activeMode.color }} />
-              <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: activeMode.color }}>{activeMode.label}</span>
+              <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: resultColor }} />
+              <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: resultColor }}>
+                {activeMode.label}
+                {route.routeName ? ` · ${route.routeName}` : ''}
+              </span>
             </div>
             <div className="flex items-baseline gap-2">
               <span className="text-4xl font-black text-gray-900 tracking-tighter">{formatDuration(route.duration)}</span>
             </div>
-            <div className="text-[12px] text-gray-400 font-medium mt-1">
-              {formatDistance(route.distance)}
+            {/* Estimated arrival time */}
+            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+              <span className="text-[12px] text-gray-400 font-medium">{formatDistance(route.distance)}</span>
+              <div className="flex items-center gap-1 text-[12px] font-semibold text-gray-500">
+                <Clock className="w-3 h-3" />
+                <span>Llegas ~{arrivalTime(route.duration)}</span>
+              </div>
               {route.routeName && (
-                <span className="ml-2 text-[11px] font-bold px-2 py-0.5 rounded-full text-white inline-block" style={{ background: route.routeColor || activeMode.color }}>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full text-white inline-block" style={{ background: resultColor }}>
                   {route.routeName}
                 </span>
               )}
             </div>
           </div>
-          <div className="p-3.5 rounded-2xl" style={{ background: `${activeMode.color}18`, color: activeMode.color }}>
+          <div className="p-3.5 rounded-2xl" style={{ background: `${resultColor}18`, color: resultColor }}>
             <activeMode.Icon className="w-6 h-6" />
           </div>
         </div>
@@ -311,7 +383,8 @@ export default function Sidebar({
             {route.instructions?.map((inst: any, idx: number) => (
               <div key={idx} className="relative flex gap-4 group">
                 <div className="relative z-10 w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm border transition-transform group-hover:scale-110"
-                  style={inst.color ? { background: inst.color, borderColor: inst.color, color: 'white' } : { background: 'white', borderColor: '#e5e7eb', color: '#6b7280' }}>
+                  style={inst.color ? { background: inst.color, borderColor: inst.color, color: 'white' }
+                    : { background: 'white', borderColor: '#e5e7eb', color: '#6b7280' }}>
                   <InstructionIcon icon={inst.icon} />
                 </div>
                 <div className="pt-1.5 flex-1 min-w-0">
@@ -331,7 +404,7 @@ export default function Sidebar({
     </motion.div>
   );
 
-  // ── Desktop layout ─────────────────────────────────────────────────────────
+  // ── Desktop ──────────────────────────────────────────────────────────────
   const desktopPanel = (
     <div className="hidden md:flex absolute top-0 left-0 p-5 w-[400px] pointer-events-none z-[1001] flex-col gap-3 h-full">
       <motion.div initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }}>{inputPanel}</motion.div>
@@ -349,7 +422,7 @@ export default function Sidebar({
     </div>
   );
 
-  // ── Mobile bottom sheet ─────────────────────────────────────────────────
+  // ── Mobile bottom sheet ──────────────────────────────────────────────────
   const mobileSheet = (
     <div className="md:hidden absolute bottom-0 left-0 right-0 z-[1001] pointer-events-none">
       <motion.div
@@ -358,18 +431,13 @@ export default function Sidebar({
         className="relative bg-white/98 backdrop-blur-xl rounded-t-3xl shadow-[0_-8px_40px_rgba(0,0,0,0.18)] pointer-events-auto flex flex-col overflow-hidden"
         style={{ maxHeight: '92vh' }}
       >
-        {/* Drag handle + expand/collapse button */}
         <div className="flex flex-col items-center pt-3 pb-1 gap-1 shrink-0">
           <div className="w-10 h-1 bg-gray-200 rounded-full" />
-          <button
-            onClick={() => setSheet(s => s === 'peek' ? 'half' : s === 'half' ? 'full' : 'peek')}
-            className="mt-1 p-1 text-gray-400 active:scale-90 transition-transform"
-          >
+          <button onClick={() => setSheet(s => s === 'peek' ? 'half' : s === 'half' ? 'full' : 'peek')}
+            className="mt-1 p-1 text-gray-400 active:scale-90 transition-transform">
             {sheet === 'full' ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
           </button>
         </div>
-
-        {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto px-4 pb-6 space-y-3 custom-scrollbar">
           {inputPanel}
           {!route && <RouteBrowser />}

@@ -58,3 +58,35 @@ h6 {
   background: #e5e7eb;
   border-radius: 99px;
 }
+
+/* ── Route line draw animation ──────────────────────────────────────────── */
+@keyframes route-draw {
+  from {
+    stroke-dashoffset: 3000;
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+.route-line-animated path {
+  stroke-dasharray: 3000;
+  stroke-dashoffset: 3000;
+  animation: route-draw 1.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Leaflet tooltip custom style */
+.leaflet-tooltip {
+  border-radius: 10px !important;
+  padding: 4px 10px !important;
+  border: none !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15) !important;
+  font-family: inherit !important;
+}
