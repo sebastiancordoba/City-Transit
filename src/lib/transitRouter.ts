@@ -61,22 +61,25 @@ function clampGeometry(
     return [...geometry.slice(ei, si + 1)].reverse();
 }
 
-// Maps our internal profile names to OSRM's public API profile names
-const OSRM_PROFILE_MAP = {
-    foot: 'walking',
-    bike: 'cycling',
-    car: 'driving',
-} as const;
+// Each transport mode uses a DIFFERENT public routing server.
+// router.project-osrm.org only runs the car/driving profile.
+// For walking and cycling we use routing.openstreetmap.de which has
+// separate OSRM instances built with the correct graph data.
+const OSRM_ENDPOINTS: Record<OsrmProfile, string> = {
+    foot: 'https://routing.openstreetmap.de/routed-foot/route/v1/foot',
+    bike: 'https://routing.openstreetmap.de/routed-bike/route/v1/bike',
+    car: 'https://router.project-osrm.org/route/v1/driving',
+};
 
-export type OsrmProfile = keyof typeof OSRM_PROFILE_MAP;
+export type OsrmProfile = 'foot' | 'bike' | 'car';
 
 export async function fetchOSRMRoute(
     profile: OsrmProfile,
     originLat: number, originLng: number,
     destLat: number, destLng: number
 ) {
-    const osrmProfile = OSRM_PROFILE_MAP[profile];
-    const url = `https://router.project-osrm.org/route/v1/${osrmProfile}/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson&steps=true`;
+    const base = OSRM_ENDPOINTS[profile];
+    const url = `${base}/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson&steps=true`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`OSRM error: ${res.statusText}`);
     const data = await res.json() as any;
