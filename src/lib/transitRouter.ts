@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Client-side transit router.
  * Mirrors server-side route-algorithm.ts but works entirely in the browser
@@ -60,12 +61,22 @@ function clampGeometry(
     return [...geometry.slice(ei, si + 1)].reverse();
 }
 
+// Maps our internal profile names to OSRM's public API profile names
+const OSRM_PROFILE_MAP = {
+    foot: 'walking',
+    bike: 'cycling',
+    car: 'driving',
+} as const;
+
+export type OsrmProfile = keyof typeof OSRM_PROFILE_MAP;
+
 export async function fetchOSRMRoute(
-    profile: 'foot' | 'bike' | 'car',
+    profile: OsrmProfile,
     originLat: number, originLng: number,
     destLat: number, destLng: number
 ) {
-    const url = `https://router.project-osrm.org/route/v1/${profile}/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson&steps=true`;
+    const osrmProfile = OSRM_PROFILE_MAP[profile];
+    const url = `https://router.project-osrm.org/route/v1/${osrmProfile}/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson&steps=true`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`OSRM error: ${res.statusText}`);
     const data = await res.json() as any;
@@ -76,14 +87,28 @@ export async function fetchOSRMRoute(
     );
     const instructions = (route.legs[0]?.steps ?? []).map((step: any) => {
         const t = step.maneuver?.type ?? '';
+        const mod = step.maneuver?.modifier ?? '';
         const iconMap: Record<string, string> = {
-            'turn': step.maneuver?.modifier?.includes('left') ? 'turn-left' : 'turn-right',
-            'depart': 'start', 'arrive': 'arrive',
-            'roundabout': 'roundabout', 'rotary': 'roundabout',
+            'turn': mod.includes('left') ? 'turn-left' : 'turn-right',
+            'new name': mod.includes('left') ? 'turn-left' : 'turn-right',
+            'depart': 'start',
+            'arrive': 'arrive',
+            'roundabout': 'roundabout',
+            'rotary': 'roundabout',
+            'continue': 'straight',
+            'merge': 'straight',
         };
+        const textMap: Record<string, string> = {
+            depart: 'Comienza en',
+            arrive: 'Llegas a tu destino',
+            roundabout: 'Toma la rotonda',
+        };
+        const streetName = step.name ? `${step.name}` : '';
+        const text = textMap[t] ? `${textMap[t]}${streetName ? ` · ${streetName}` : ''}` : streetName || 'Continúa recto';
         return {
-            type: t, icon: iconMap[t] ?? 'straight',
-            text: step.name || (t === 'depart' ? 'Start' : t === 'arrive' ? 'Arrive at destination' : 'Continue'),
+            type: t,
+            icon: iconMap[t] ?? 'straight',
+            text,
             subtext: `${Math.round(step.distance)} m · ${Math.round(step.duration / 60)} min`,
         };
     });

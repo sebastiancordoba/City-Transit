@@ -3,10 +3,11 @@ import Map from './components/Map';
 import type { MapStyleId } from './components/Map';
 import Sidebar from './components/Sidebar';
 import { findTransitRoute, fetchOSRMRoute, loadRoutesData } from './lib/transitRouter';
+import type { OsrmProfile } from './lib/transitRouter';
 
 export type TransportMode = 'walking' | 'bicycle' | 'car' | 'transit';
 
-const OSRM_PROFILES: Record<string, 'foot' | 'bike' | 'car'> = {
+const OSRM_PROFILES: Record<string, OsrmProfile> = {
   walking: 'foot',
   bicycle: 'bike',
   car: 'car',
