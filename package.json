@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "generate-data": "npx tsx scripts/generate-data.ts",
+    "prebuild": "npx tsx scripts/generate-data.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
