@@ -66,6 +66,7 @@ export default function App() {
   }, []);
 
   const handleMapClick = (lat: number, lng: number) => {
+    try { navigator.vibrate?.(10); } catch { }
     if (route) { setOrigin([lat, lng]); setDestination(null); setRoute(null); setError(null); return; }
     if (!origin) { setOrigin([lat, lng]); }
     else if (!destination) { setDestination([lat, lng]); }

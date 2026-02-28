@@ -9,6 +9,11 @@
 body {
   font-family: var(--font-sans);
   overflow: hidden;
+  /* Prevent iOS elastic scroll bounce outside the sheet */
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+  /* Fill the full viewport on mobile including notch areas */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 h1,
