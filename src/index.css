@@ -95,3 +95,16 @@ h6 {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15) !important;
   font-family: inherit !important;
 }
+
+/* Prevent iOS Safari auto-zoom on input focus.
+   Safari zooms in when font-size < 16px. We set 16px here and let
+   the component's visual styling handle apparent size via padding/scale.
+   The viewport user-scalable=no handles the rest. */
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="tel"],
+textarea,
+select {
+  font-size: 16px !important;
+}
