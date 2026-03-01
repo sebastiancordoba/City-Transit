@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Map from './components/Map';
 import type { MapStyleId } from './components/Map';
 import Sidebar from './components/Sidebar';
-import { findTransitRoute, fetchOSRMRoute, loadRoutesData } from './lib/transitRouter';
+import { findTransitRoutes, fetchOSRMRoute, loadRoutesData } from './lib/transitRouter';
 import type { OsrmProfile } from './lib/transitRouter';
 
 export type TransportMode = 'walking' | 'bicycle' | 'car' | 'transit';
@@ -13,24 +13,29 @@ const OSRM_PROFILES: Record<string, OsrmProfile> = {
   car: 'car',
 };
 
+// Walk radius steps (metres) that the user can expand to
+const RADIUS_STEPS = [1000, 1500, 2000, 3000];
+
 export default function App() {
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [destination, setDestination] = useState<[number, number] | null>(null);
   const [route, setRoute] = useState<any | null>(null);
+  const [transitAlts, setTransitAlts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // When transit finds 0 results at this radius, we offer to expand
+  const [noRoutesRadius, setNoRoutesRadius] = useState<number | null>(null);
   const [mode, setMode] = useState<TransportMode>('transit');
   const [mapStyle, setMapStyle] = useState<MapStyleId>('streets');
   const autoSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Pre-load route data on mount so first search is instant
   useEffect(() => { loadRoutesData().catch(() => { }); }, []);
 
-  // ── Auto-search: fires 900ms after both points are set ──────────────────
+  // Auto-search 900ms after both points are set
   useEffect(() => {
     if (!origin || !destination || route || loading) return;
     if (autoSearchTimer.current) clearTimeout(autoSearchTimer.current);
-    autoSearchTimer.current = setTimeout(() => { doFindRoute(origin, destination, mode); }, 900);
+    autoSearchTimer.current = setTimeout(() => { doFindRoute(origin, destination, mode, 1000); }, 900);
     return () => { if (autoSearchTimer.current) clearTimeout(autoSearchTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [origin, destination, mode]);
@@ -38,22 +43,24 @@ export default function App() {
   const doFindRoute = useCallback(async (
     orig: [number, number],
     dest: [number, number],
-    currentMode: TransportMode
+    currentMode: TransportMode,
+    radius = 1000
   ) => {
     setLoading(true);
     setError(null);
+    setNoRoutesRadius(null);
     try {
       if (currentMode === 'transit') {
-        const result = await findTransitRoute(orig[0], orig[1], dest[0], dest[1]);
-        if (!result) {
-          throw new Error(
-            'No se encontró ninguna ruta de camión a menos de 1 km de tus puntos. ' +
-            'Intenta mover el origen o el destino más cerca de una avenida principal, ' +
-            'o cambia el modo a "Caminar".'
-          );
+        const results = await findTransitRoutes(orig[0], orig[1], dest[0], dest[1], radius);
+        if (!results.length) {
+          // No results → offer expanding radius instead of an error
+          setNoRoutesRadius(radius);
+        } else {
+          setTransitAlts(results);
+          setRoute({ ...results[0], mode: 'transit' });
         }
-        setRoute({ ...result, mode: 'transit' });
       } else {
+        setTransitAlts([]);
         const profile = OSRM_PROFILES[currentMode];
         const result = await fetchOSRMRoute(profile, orig[0], orig[1], dest[0], dest[1]);
         setRoute(result);
@@ -65,39 +72,57 @@ export default function App() {
     }
   }, []);
 
+  // Called when the user taps "Ampliar búsqueda"
+  const handleExpandRadius = useCallback(() => {
+    if (!origin || !destination || noRoutesRadius == null) return;
+    const nextIdx = RADIUS_STEPS.indexOf(noRoutesRadius) + 1;
+    const nextRadius = RADIUS_STEPS[nextIdx] ?? RADIUS_STEPS[RADIUS_STEPS.length - 1];
+    if (nextRadius === noRoutesRadius) {
+      // Already at max — show a real error
+      setError('No se encontraron rutas de camión incluso ampliando el radio a 3 km. Prueba con otro destino.');
+      setNoRoutesRadius(null);
+      return;
+    }
+    doFindRoute(origin, destination, mode, nextRadius);
+  }, [origin, destination, mode, noRoutesRadius, doFindRoute]);
+
   const handleMapClick = (lat: number, lng: number) => {
     try { navigator.vibrate?.(10); } catch { }
-    if (route) { setOrigin([lat, lng]); setDestination(null); setRoute(null); setError(null); return; }
+    if (route) { setOrigin([lat, lng]); setDestination(null); resetResults(); return; }
     if (!origin) { setOrigin([lat, lng]); }
     else if (!destination) { setDestination([lat, lng]); }
-    else { setOrigin([lat, lng]); setDestination(null); setRoute(null); }
+    else { setOrigin([lat, lng]); setDestination(null); resetResults(); }
   };
 
+  const resetResults = () => { setRoute(null); setTransitAlts([]); setError(null); setNoRoutesRadius(null); };
+
   const handleSelectPlace = (lat: number, lng: number, _label: string, field: 'origin' | 'destination') => {
-    if (route) { setRoute(null); setError(null); }
+    resetResults();
     if (field === 'origin') setOrigin([lat, lng]);
     else setDestination([lat, lng]);
   };
 
-  // Called by sidebar "clear origin" / "clear destination" buttons
   const handleClearField = (field: 'origin' | 'destination') => {
-    setRoute(null); setError(null);
+    resetResults();
     if (field === 'origin') setOrigin(null);
     else setDestination(null);
   };
 
+  const handleSelectAlt = useCallback((idx: number) => {
+    if (transitAlts[idx]) setRoute({ ...transitAlts[idx], mode: 'transit' });
+  }, [transitAlts]);
+
   const findRoute = useCallback(() => {
-    if (origin && destination) doFindRoute(origin, destination, mode);
+    if (origin && destination) doFindRoute(origin, destination, mode, 1000);
   }, [origin, destination, mode, doFindRoute]);
 
-  const clear = () => { setOrigin(null); setDestination(null); setRoute(null); setError(null); };
-  const swap = () => { setOrigin(destination); setDestination(origin); setRoute(null); setError(null); };
+  const clear = () => { setOrigin(null); setDestination(null); resetResults(); };
+  const swap = () => { setOrigin(destination); setDestination(origin); resetResults(); };
   const handleModeChange = (newMode: TransportMode) => {
     setMode(newMode);
-    setRoute(null); setError(null);
-    // Re-trigger auto-search after mode change if both points set
+    resetResults();
     if (origin && destination) {
-      setTimeout(() => doFindRoute(origin, destination, newMode), 400);
+      setTimeout(() => doFindRoute(origin, destination, newMode, 1000), 400);
     }
   };
 
@@ -118,8 +143,10 @@ export default function App() {
         origin={origin}
         destination={destination}
         route={route}
+        transitAlts={transitAlts}
         loading={loading}
         error={error}
+        noRoutesRadius={noRoutesRadius}
         mode={mode}
         onModeChange={handleModeChange}
         onFindRoute={findRoute}
@@ -127,6 +154,8 @@ export default function App() {
         onSwap={swap}
         onSelectPlace={handleSelectPlace}
         onClearField={handleClearField}
+        onSelectAlt={handleSelectAlt}
+        onExpandRadius={handleExpandRadius}
       />
     </main>
   );
