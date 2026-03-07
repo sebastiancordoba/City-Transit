@@ -58,6 +58,8 @@ for (const file of files) {
 
 interface RouteRecord {
     id: number;
+    routeNumber: number;
+    fileKey: string;
     name: string;
     description: string | null;
     color: string;
@@ -84,6 +86,9 @@ for (const [key, { route, stops }] of groups) {
     if (!route) continue;
 
     const routeGeoJSON = JSON.parse(fs.readFileSync(path.join(ROUTES_DIR, route), 'utf8'));
+    // Extract route number from the file key (e.g. "003_ida" → 3, "034a" → 34)
+    const routeNumMatch = key.match(/^(\d+)/);
+    const routeNumber = routeNumMatch ? parseInt(routeNumMatch[1]) : 0;
 
     for (const feature of routeGeoJSON.features) {
         const props = feature.properties || {};
@@ -123,7 +128,7 @@ for (const [key, { route, stops }] of groups) {
             .sort((a, b) => a.seq - b.seq)
             .filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
 
-        output.push({ id: routeId++, name, description: desc, color, geometry, stops: dedupedStops });
+        output.push({ id: routeId++, routeNumber, fileKey: key, name, description: desc, color, geometry, stops: dedupedStops });
     }
 }
 

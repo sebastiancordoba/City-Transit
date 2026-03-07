@@ -27,6 +27,7 @@ export default function App() {
   const [noRoutesRadius, setNoRoutesRadius] = useState<number | null>(null);
   const [mode, setMode] = useState<TransportMode>('transit');
   const [mapStyle, setMapStyle] = useState<MapStyleId>('streets');
+  const [previewRoute, setPreviewRoute] = useState<{ geometry: [number, number][]; color: string; name: string } | null>(null);
   const autoSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { loadRoutesData().catch(() => { }); }, []);
@@ -94,7 +95,7 @@ export default function App() {
     else { setOrigin([lat, lng]); setDestination(null); resetResults(); }
   };
 
-  const resetResults = () => { setRoute(null); setTransitAlts([]); setError(null); setNoRoutesRadius(null); };
+  const resetResults = () => { setRoute(null); setTransitAlts([]); setError(null); setNoRoutesRadius(null); setPreviewRoute(null); };
 
   const handleSelectPlace = (lat: number, lng: number, _label: string, field: 'origin' | 'destination') => {
     resetResults();
@@ -137,6 +138,7 @@ export default function App() {
           onMapClick={handleMapClick}
           mapStyle={mapStyle}
           onMapStyleChange={setMapStyle}
+          previewRoute={previewRoute}
         />
       </div>
       <Sidebar
@@ -156,6 +158,7 @@ export default function App() {
         onClearField={handleClearField}
         onSelectAlt={handleSelectAlt}
         onExpandRadius={handleExpandRadius}
+        onPreviewRoute={setPreviewRoute}
       />
     </main>
   );

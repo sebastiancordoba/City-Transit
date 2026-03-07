@@ -14,6 +14,8 @@ interface StopRecord {
 }
 interface RouteRecord {
     id: number;
+    routeNumber: number;
+    fileKey: string;
     name: string;
     description: string | null;
     color: string;
@@ -539,9 +541,9 @@ export async function findTransitRoute(
 }
 
 
-export async function getAllRoutes(): Promise<{ id: number; name: string; description: string | null; color: string }[]> {
+export async function getAllRoutes(): Promise<{ id: number; routeNumber: number; fileKey: string; name: string; description: string | null; color: string; geometry: [number, number][] }[]> {
     const routes = await loadRoutesData();
     return routes
-        .map(r => ({ id: r.id, name: r.name, description: r.description, color: r.color }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .map(r => ({ id: r.id, routeNumber: r.routeNumber, fileKey: r.fileKey, name: r.name, description: r.description, color: r.color, geometry: r.geometry }))
+        .sort((a, b) => a.routeNumber - b.routeNumber || a.fileKey.localeCompare(b.fileKey));
 }

@@ -171,6 +171,16 @@ function StyleSwitcher({ activeStyle, onChange }: { activeStyle: MapStyleId; onC
   );
 }
 
+function PreviewFitter({ geometry }: { geometry: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (geometry.length < 2) return;
+    const bounds = L.latLngBounds(geometry);
+    map.fitBounds(bounds, { padding: [80, 80], animate: true, maxZoom: 16 });
+  }, [geometry, map]);
+  return null;
+}
+
 // ── Main Map Component ─────────────────────────────────────────────────────
 interface MapProps {
   origin: [number, number] | null;
@@ -180,9 +190,10 @@ interface MapProps {
   onMapClick?: (lat: number, lng: number) => void;
   mapStyle: MapStyleId;
   onMapStyleChange: (id: MapStyleId) => void;
+  previewRoute?: { geometry: [number, number][]; color: string; name: string } | null;
 }
 
-export default function Map({ origin, destination, route, mode, onMapClick, mapStyle, onMapStyleChange }: MapProps) {
+export default function Map({ origin, destination, route, mode, onMapClick, mapStyle, onMapStyleChange, previewRoute }: MapProps) {
   const center: [number, number] = [19.5438, -96.9270]; // Xalapa, Veracruz
   const routeColor = route?.routeColor || MODE_COLORS[mode];
   const activeTile = MAP_STYLES.find(s => s.id === mapStyle) ?? MAP_STYLES[0];
@@ -198,6 +209,7 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
       >
         <ZoomControl position="bottomright" />
         <MapUpdater origin={origin} destination={destination} route={route} />
+        {!route && previewRoute && <PreviewFitter geometry={previewRoute.geometry} />}
         <MapEvents onClick={onMapClick} />
 
         <TileLayer
@@ -347,6 +359,17 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
               />
             )}
           </>
+        )}
+        {/* Preview route (route browser click) — only when no routing result */}
+        {!route && previewRoute && previewRoute.geometry.length > 1 && (
+          <Polyline
+            positions={previewRoute.geometry}
+            color={previewRoute.color}
+            weight={6}
+            opacity={0.85}
+            lineCap="round"
+            lineJoin="round"
+          />
         )}
       </MapContainer>
 
