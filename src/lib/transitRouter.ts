@@ -22,6 +22,10 @@ interface RouteRecord {
 }
 
 let routesData: RouteRecord[] | null = null;
+// Stop → routes index, built once after load
+let stopToRoutes: Map<number, { route: RouteRecord; idx: number }[]> | null = null;
+// All stops flattened (with route info), for spatial queries
+let allStopsFlat: (StopRecord & { routeId: number })[] | null = null;
 
 export async function loadRoutesData(): Promise<RouteRecord[]> {
     if (routesData) return routesData;
@@ -29,6 +33,19 @@ export async function loadRoutesData(): Promise<RouteRecord[]> {
     const res = await fetch(`${base}data/routes-data.json`);
     if (!res.ok) throw new Error('Failed to load routes data');
     routesData = await res.json();
+
+    // Build stop → routes index
+    stopToRoutes = new Map();
+    allStopsFlat = [];
+    for (const route of routesData!) {
+        for (let idx = 0; idx < route.stops.length; idx++) {
+            const stop = route.stops[idx];
+            if (!stopToRoutes.has(stop.id)) stopToRoutes.set(stop.id, []);
+            stopToRoutes.get(stop.id)!.push({ route, idx });
+            allStopsFlat!.push({ ...stop, routeId: route.id });
+        }
+    }
+
     return routesData!;
 }
 
@@ -40,6 +57,18 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number): numb
     const Δλ = ((lon2 - lon1) * Math.PI) / 180;
     const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Returns stops within radiusM of (lat, lng), using bbox pre-filter. */
+function stopsNear(lat: number, lng: number, radiusM: number): (StopRecord & { routeId: number })[] {
+    if (!allStopsFlat) return [];
+    const dLat = radiusM / 111_000;
+    const dLng = radiusM / (111_000 * Math.cos((lat * Math.PI) / 180));
+    return allStopsFlat.filter(s =>
+        Math.abs(s.lat - lat) <= dLat &&
+        Math.abs(s.lng - lng) <= dLng &&
+        haversine(lat, lng, s.lat, s.lng) <= radiusM
+    );
 }
 
 function clampGeometry(
@@ -124,43 +153,30 @@ export async function fetchOSRMRoute(
     };
 }
 
-const MAX_RESULTS = 5;      // max alternative routes to return
+const MAX_RESULTS = 5;
+const MAX_TRANSFER_WALK = 400; // metres between alighting stop A and boarding stop B
+const MAX_TRANSFERS = 2;       // up to 3 buses total
 
-export async function findTransitRoutes(
+// ── Direct single-bus candidates ──────────────────────────────────────────────
+
+interface DirectCandidate {
+    route: RouteRecord;
+    oStop: StopRecord;
+    dStop: StopRecord;
+    walkTo: number;
+    walkFrom: number;
+    oi: number;
+    di: number;
+    estDuration: number;
+}
+
+function findDirectCandidates(
+    routes: RouteRecord[],
     originLat: number, originLng: number,
     destLat: number, destLng: number,
-    maxWalk = 1000            // configurable walk radius in metres
-): Promise<any[]> {
-    const routes = await loadRoutesData();
-    const directWalk = haversine(originLat, originLng, destLat, destLng);
-
-    // Short distances: just walk it
-    if (directWalk <= 800) {
-        return [{
-            type: 'transit',
-            routeId: -1,
-            routeName: null,
-            routeDescription: null,
-            routeColor: '#6b7280',
-            routeSegmentGeometry: [],
-            walkToGeometry: null,
-            walkFromGeometry: null,
-            originStop: null,
-            destStop: null,
-            pathStops: [],
-            distance: directWalk,
-            duration: (directWalk / 80) * 60,
-            instructions: [{
-                type: 'walk', icon: 'walk',
-                text: 'Camina directamente a tu destino',
-                subtext: `~${Math.round(directWalk)} m · ${Math.round(directWalk / 80)} min`,
-            }],
-        }];
-    }
-
-    // ── Collect best stop-pair per unique route ──────────────────────────
-    // key = route.id, value = best (lowest estimated duration) candidate
-    const byRoute = new Map<number, { route: RouteRecord; oStop: StopRecord; dStop: StopRecord; walkTo: number; walkFrom: number; oi: number; di: number; estDuration: number }>();
+    maxWalk: number
+): DirectCandidate[] {
+    const byRoute = new Map<number, DirectCandidate>();
 
     for (const route of routes) {
         const stops = route.stops;
@@ -175,7 +191,6 @@ export async function findTransitRoutes(
                 if (walkFrom > maxWalk) continue;
 
                 const transitStops = di - oi;
-                // Estimate: walking at 80 m/min + ~2 min per bus stop
                 const estDuration = ((walkTo + walkFrom) / 80 + transitStops * 2) * 60;
 
                 const prev = byRoute.get(route.id);
@@ -186,61 +201,331 @@ export async function findTransitRoutes(
         }
     }
 
-    if (byRoute.size === 0) return [];
+    return [...byRoute.values()].sort((a, b) => a.estDuration - b.estDuration);
+}
 
-    // Sort by estimated duration, keep top MAX_RESULTS
-    const candidates = [...byRoute.values()]
-        .sort((a, b) => a.estDuration - b.estDuration)
-        .slice(0, MAX_RESULTS);
+// ── Multi-leg (transfer) candidates ───────────────────────────────────────────
 
-    // ── Fetch OSRM walk legs in parallel for all candidates ──────────────
-    const results = await Promise.all(candidates.map(async c => {
-        const { route, oStop, dStop, walkTo, walkFrom, oi, di } = c;
-        const transitStops = di - oi;
-        const pathStops: StopRecord[] = route.stops.slice(oi, di + 1);
-        const geometry = clampGeometry(route.geometry, oStop.lat, oStop.lng, dStop.lat, dStop.lng);
+interface LegInfo {
+    route: RouteRecord;
+    boardIdx: number;
+    alightIdx: number;
+    boardStop: StopRecord;
+    alightStop: StopRecord;
+    walkToBoard: number; // metres from previous alight (or origin) to this boarding stop
+}
 
-        const [walkToRes, walkFromRes] = await Promise.allSettled([
-            fetchOSRMRoute('foot', originLat, originLng, oStop.lat, oStop.lng),
-            fetchOSRMRoute('foot', dStop.lat, dStop.lng, destLat, destLng),
-        ]);
+interface TransferCandidate {
+    legs: LegInfo[];
+    finalWalkFrom: number;
+    estDuration: number;
+}
 
-        const walkToGeometry = walkToRes.status === 'fulfilled' ? walkToRes.value.geometry : null;
-        const walkFromGeometry = walkFromRes.status === 'fulfilled' ? walkFromRes.value.geometry : null;
-        const walkToDuration = walkToRes.status === 'fulfilled' ? walkToRes.value.duration : (walkTo / 80) * 60;
-        const walkFromDuration = walkFromRes.status === 'fulfilled' ? walkFromRes.value.duration : (walkFrom / 80) * 60;
+interface OpenPath {
+    legs: LegInfo[];
+    lastLat: number;
+    lastLng: number;
+    usedRouteIds: Set<number>;
+    estSoFar: number; // seconds so far (walks + transit)
+}
 
-        // Est. bus time: ~28 km/h average urban speed, 300 m per stop
-        const busDuration = (transitStops * 300) / (28000 / 3600);
-        const totalDuration = walkToDuration + busDuration + walkFromDuration;
+function estLegDuration(walkToBoard: number, transitStops: number): number {
+    return (walkToBoard / 80) * 60 + transitStops * 2 * 60;
+}
 
-        const instructions = [
-            { type: 'walk', icon: 'walk', text: `Camina hasta ${oStop.name}`, subtext: `~${Math.round(walkTo)} m · ${Math.round(walkToDuration / 60)} min` },
-            { type: 'board', icon: 'bus', text: `Aborda ${route.name}`, subtext: route.description ? `Dirección: ${route.description}` : `Hacia ${dStop.name}`, color: route.color },
-            { type: 'ride', icon: 'ride', text: `Viaja ${transitStops} parada${transitStops !== 1 ? 's' : ''}`, subtext: transitStops > 1 ? `Pasando ${transitStops - 1} parada${transitStops - 1 !== 1 ? 's' : ''} intermedia${transitStops - 1 !== 1 ? 's' : ''}` : 'La siguiente parada es tu destino' },
-            { type: 'alight', icon: 'alight', text: `Bájate en ${dStop.name}`, subtext: 'Tu parada de bajada' },
-            { type: 'walk', icon: 'walk', text: 'Camina a tu destino', subtext: `~${Math.round(walkFrom)} m · ${Math.round(walkFromDuration / 60)} min` },
-        ];
+function findMultiLegCandidates(
+    originLat: number, originLng: number,
+    destLat: number, destLng: number,
+    maxWalk: number
+): TransferCandidate[] {
+    if (!stopToRoutes) return [];
+
+    const results: TransferCandidate[] = [];
+    // key = joined route ids, value = best estDuration
+    const seen = new Map<string, number>();
+
+    // Seed: paths of 0 legs, starting at origin
+    let openPaths: OpenPath[] = [{
+        legs: [],
+        lastLat: originLat,
+        lastLng: originLng,
+        usedRouteIds: new Set(),
+        estSoFar: 0,
+    }];
+
+    for (let transfer = 0; transfer < MAX_TRANSFERS; transfer++) {
+        const nextPaths: OpenPath[] = [];
+        const walkRadius = transfer === 0 ? maxWalk : MAX_TRANSFER_WALK;
+
+        for (const path of openPaths) {
+            const nearStops = stopsNear(path.lastLat, path.lastLng, walkRadius);
+
+            // Group by route to avoid redundant inner loops
+            const routeMap = new Map<number, { route: RouteRecord; entries: { stop: StopRecord; idx: number; walkToBoard: number }[] }>();
+            for (const s of nearStops) {
+                const entries = stopToRoutes!.get(s.id) ?? [];
+                for (const { route, idx } of entries) {
+                    if (path.usedRouteIds.has(route.id)) continue;
+                    if (!routeMap.has(route.id)) routeMap.set(route.id, { route, entries: [] });
+                    routeMap.get(route.id)!.entries.push({
+                        stop: s,
+                        idx,
+                        walkToBoard: haversine(path.lastLat, path.lastLng, s.lat, s.lng),
+                    });
+                }
+            }
+
+            for (const { route, entries } of routeMap.values()) {
+                // Best boarding option for this route (shortest walk)
+                const best = entries.reduce((a, b) => a.walkToBoard < b.walkToBoard ? a : b);
+                const { stop: boardStop, idx: boardIdx, walkToBoard } = best;
+
+                const newUsed = new Set(path.usedRouteIds);
+                newUsed.add(route.id);
+
+                for (let di = boardIdx + 1; di < route.stops.length; di++) {
+                    const alightStop = route.stops[di];
+                    const transitStops = di - boardIdx;
+                    const legEst = estLegDuration(walkToBoard, transitStops);
+
+                    // Check if this alighting stop reaches destination
+                    const walkFrom = haversine(destLat, destLng, alightStop.lat, alightStop.lng);
+                    if (walkFrom <= maxWalk) {
+                        const totalEst = path.estSoFar + legEst + (walkFrom / 80) * 60;
+                        const newLegs = [...path.legs, { route, boardIdx, alightIdx: di, boardStop, alightStop, walkToBoard }];
+                        // Only record if this is a multi-leg path (at least 2 buses)
+                        if (newLegs.length >= 2) {
+                            const key = newLegs.map(l => l.route.id).join('→');
+                            if (!seen.has(key) || seen.get(key)! > totalEst) {
+                                seen.set(key, totalEst);
+                                results.push({ legs: newLegs, finalWalkFrom: walkFrom, estDuration: totalEst });
+                            }
+                        }
+                    }
+
+                    // Expand for next transfer level (only if more transfers allowed)
+                    if (transfer < MAX_TRANSFERS - 1) {
+                        const newEst = path.estSoFar + legEst;
+                        nextPaths.push({
+                            legs: [...path.legs, { route, boardIdx, alightIdx: di, boardStop, alightStop, walkToBoard }],
+                            lastLat: alightStop.lat,
+                            lastLng: alightStop.lng,
+                            usedRouteIds: newUsed,
+                            estSoFar: newEst,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Prune open paths: keep best 150 by estSoFar to avoid combinatorial explosion
+        nextPaths.sort((a, b) => a.estSoFar - b.estSoFar);
+        openPaths = nextPaths.slice(0, 150);
+    }
+
+    return results.sort((a, b) => a.estDuration - b.estDuration);
+}
+
+// ── Result builders ────────────────────────────────────────────────────────────
+
+async function buildDirectResult(
+    c: DirectCandidate,
+    originLat: number, originLng: number,
+    destLat: number, destLng: number
+) {
+    const { route, oStop, dStop, walkTo, walkFrom, oi, di } = c;
+    const transitStops = di - oi;
+    const pathStops: StopRecord[] = route.stops.slice(oi, di + 1);
+    const geometry = clampGeometry(route.geometry, oStop.lat, oStop.lng, dStop.lat, dStop.lng);
+
+    const [walkToRes, walkFromRes] = await Promise.allSettled([
+        fetchOSRMRoute('foot', originLat, originLng, oStop.lat, oStop.lng),
+        fetchOSRMRoute('foot', dStop.lat, dStop.lng, destLat, destLng),
+    ]);
+
+    const walkToGeometry = walkToRes.status === 'fulfilled' ? walkToRes.value.geometry : null;
+    const walkFromGeometry = walkFromRes.status === 'fulfilled' ? walkFromRes.value.geometry : null;
+    const walkToDuration = walkToRes.status === 'fulfilled' ? walkToRes.value.duration : (walkTo / 80) * 60;
+    const walkFromDuration = walkFromRes.status === 'fulfilled' ? walkFromRes.value.duration : (walkFrom / 80) * 60;
+    const busDuration = (transitStops * 300) / (28000 / 3600);
+    const totalDuration = walkToDuration + busDuration + walkFromDuration;
+
+    const instructions = [
+        { type: 'walk', icon: 'walk', text: `Camina hasta ${oStop.name}`, subtext: `~${Math.round(walkTo)} m · ${Math.round(walkToDuration / 60)} min` },
+        { type: 'board', icon: 'bus', text: `Aborda ${route.name}`, subtext: route.description ? `Dirección: ${route.description}` : `Hacia ${dStop.name}`, color: route.color },
+        { type: 'ride', icon: 'ride', text: `Viaja ${transitStops} parada${transitStops !== 1 ? 's' : ''}`, subtext: transitStops > 1 ? `Pasando ${transitStops - 1} parada${transitStops - 1 !== 1 ? 's' : ''} intermedia${transitStops - 1 !== 1 ? 's' : ''}` : 'La siguiente parada es tu destino' },
+        { type: 'alight', icon: 'alight', text: `Bájate en ${dStop.name}`, subtext: 'Tu parada de bajada' },
+        { type: 'walk', icon: 'walk', text: 'Camina a tu destino', subtext: `~${Math.round(walkFrom)} m · ${Math.round(walkFromDuration / 60)} min` },
+    ];
+
+    return {
+        type: 'transit' as const,
+        isTransfer: false,
+        routeId: route.id,
+        routeName: route.name,
+        routeDescription: route.description,
+        routeColor: route.color,
+        routeSegmentGeometry: geometry,
+        walkToGeometry,
+        walkFromGeometry,
+        originStop: oStop,
+        destStop: dStop,
+        pathStops,
+        distance: walkTo + walkFrom + transitStops * 300,
+        duration: totalDuration,
+        instructions,
+    };
+}
+
+async function buildTransferResult(
+    tc: TransferCandidate,
+    originLat: number, originLng: number,
+    destLat: number, destLng: number
+) {
+    const { legs, finalWalkFrom } = tc;
+
+    // Fetch OSRM for all walk segments in parallel:
+    // [origin → leg0.board, leg0.alight → leg1.board, ..., lastAlight → dest]
+    const walkFetches = legs.map((leg, i) => {
+        const fromLat = i === 0 ? originLat : legs[i - 1].alightStop.lat;
+        const fromLng = i === 0 ? originLng : legs[i - 1].alightStop.lng;
+        return fetchOSRMRoute('foot', fromLat, fromLng, leg.boardStop.lat, leg.boardStop.lng);
+    });
+    const lastAlight = legs[legs.length - 1].alightStop;
+    const finalWalkFetch = fetchOSRMRoute('foot', lastAlight.lat, lastAlight.lng, destLat, destLng);
+
+    const [legWalkResults, finalWalkRes] = await Promise.all([
+        Promise.allSettled(walkFetches),
+        finalWalkFetch.catch(() => null),
+    ]);
+
+    let totalDuration = 0;
+    const builtLegs = legs.map((leg, i) => {
+        const walkRes = legWalkResults[i];
+        const walkGeometry = walkRes.status === 'fulfilled' ? walkRes.value.geometry : null;
+        const walkDist = leg.walkToBoard;
+        const walkDur = walkRes.status === 'fulfilled' ? walkRes.value.duration : (walkDist / 80) * 60;
+        const transitStops = leg.alightIdx - leg.boardIdx;
+        const busDur = (transitStops * 300) / (28000 / 3600);
+        totalDuration += walkDur + busDur;
 
         return {
-            type: 'transit' as const,
-            routeId: route.id,
-            routeName: route.name,
-            routeDescription: route.description,
-            routeColor: route.color,
-            routeSegmentGeometry: geometry,
-            walkToGeometry,
-            walkFromGeometry,
-            originStop: oStop,
-            destStop: dStop,
-            pathStops,
-            distance: walkTo + walkFrom + transitStops * 300,
-            duration: totalDuration,
-            instructions,
+            routeId: leg.route.id,
+            routeName: leg.route.name,
+            routeDescription: leg.route.description,
+            routeColor: leg.route.color,
+            routeSegmentGeometry: clampGeometry(leg.route.geometry, leg.boardStop.lat, leg.boardStop.lng, leg.alightStop.lat, leg.alightStop.lng),
+            walkGeometry,
+            walkDuration: walkDur,
+            walkDistance: walkDist,
+            originStop: leg.boardStop,
+            destStop: leg.alightStop,
+            pathStops: leg.route.stops.slice(leg.boardIdx, leg.alightIdx + 1),
+            transitStops,
         };
-    }));
+    });
 
-    // Final sort by actual computed duration
+    const finalWalkDur = finalWalkRes ? finalWalkRes.duration : (finalWalkFrom / 80) * 60;
+    totalDuration += finalWalkDur;
+
+    // Build instructions
+    const instructions: any[] = [];
+    for (let i = 0; i < builtLegs.length; i++) {
+        const leg = builtLegs[i];
+        if (i === 0) {
+            instructions.push({ type: 'walk', icon: 'walk', text: `Camina hasta ${leg.originStop.name}`, subtext: `~${Math.round(leg.walkDistance)} m · ${Math.round(leg.walkDuration / 60)} min` });
+        } else {
+            instructions.push({ type: 'transfer', icon: 'transfer', text: `Camina al siguiente camión`, subtext: `~${Math.round(leg.walkDistance)} m · ${Math.round(leg.walkDuration / 60)} min` });
+        }
+        instructions.push({ type: 'board', icon: 'bus', text: `Aborda ${leg.routeName}`, subtext: leg.routeDescription ? `Dirección: ${leg.routeDescription}` : `Hacia ${leg.destStop.name}`, color: leg.routeColor });
+        instructions.push({ type: 'ride', icon: 'ride', text: `Viaja ${leg.transitStops} parada${leg.transitStops !== 1 ? 's' : ''}`, subtext: leg.transitStops > 1 ? `Pasando ${leg.transitStops - 1} parada${leg.transitStops - 1 !== 1 ? 's' : ''} intermedia${leg.transitStops - 1 !== 1 ? 's' : ''}` : 'La siguiente parada es tu destino' });
+    }
+    const lastLeg = builtLegs[builtLegs.length - 1];
+    instructions.push({ type: 'alight', icon: 'alight', text: `Bájate en ${lastLeg.destStop.name}`, subtext: 'Tu parada de bajada' });
+    instructions.push({ type: 'walk', icon: 'walk', text: 'Camina a tu destino', subtext: `~${Math.round(finalWalkFrom)} m · ${Math.round(finalWalkDur / 60)} min` });
+
+    const routeName = builtLegs.map(l => l.routeName).join(' → ');
+
+    return {
+        type: 'transit' as const,
+        isTransfer: true,
+        legs: builtLegs,
+        // Backward-compat fields for AlternativesStrip and Map:
+        routeId: builtLegs[0].routeId,
+        routeName,
+        routeDescription: builtLegs[0].routeDescription,
+        routeColor: builtLegs[0].routeColor,
+        // For non-isTransfer rendering fallback:
+        routeSegmentGeometry: builtLegs[0].routeSegmentGeometry,
+        walkToGeometry: builtLegs[0].walkGeometry,
+        walkFromGeometry: finalWalkRes?.geometry ?? null,
+        originStop: builtLegs[0].originStop,
+        destStop: lastLeg.destStop,
+        pathStops: builtLegs.flatMap(l => l.pathStops),
+        distance: builtLegs.reduce((s, l) => s + l.walkDistance + l.transitStops * 300, 0) + finalWalkFrom,
+        duration: totalDuration,
+        instructions,
+    };
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────────
+
+export async function findTransitRoutes(
+    originLat: number, originLng: number,
+    destLat: number, destLng: number,
+    maxWalk = 1000
+): Promise<any[]> {
+    const routes = await loadRoutesData();
+    const directWalk = haversine(originLat, originLng, destLat, destLng);
+
+    // Short distances: just walk it
+    if (directWalk <= 800) {
+        return [{
+            type: 'transit',
+            isTransfer: false,
+            routeId: -1,
+            routeName: null,
+            routeDescription: null,
+            routeColor: '#6b7280',
+            routeSegmentGeometry: [],
+            walkToGeometry: null,
+            walkFromGeometry: null,
+            originStop: null,
+            destStop: null,
+            pathStops: [],
+            legs: null,
+            distance: directWalk,
+            duration: (directWalk / 80) * 60,
+            instructions: [{
+                type: 'walk', icon: 'walk',
+                text: 'Camina directamente a tu destino',
+                subtext: `~${Math.round(directWalk)} m · ${Math.round(directWalk / 80)} min`,
+            }],
+        }];
+    }
+
+    // Find direct and transfer candidates
+    const directCandidates = findDirectCandidates(routes, originLat, originLng, destLat, destLng, maxWalk);
+    const transferCandidates = findMultiLegCandidates(originLat, originLng, destLat, destLng, maxWalk);
+
+    // Merge and sort by estimated duration, keep top MAX_RESULTS
+    type AnyCandidate = { estDuration: number; kind: 'direct'; data: DirectCandidate } | { estDuration: number; kind: 'transfer'; data: TransferCandidate };
+    const merged: AnyCandidate[] = [
+        ...directCandidates.map(d => ({ estDuration: d.estDuration, kind: 'direct' as const, data: d })),
+        ...transferCandidates.map(t => ({ estDuration: t.estDuration, kind: 'transfer' as const, data: t })),
+    ];
+    merged.sort((a, b) => a.estDuration - b.estDuration);
+    const top = merged.slice(0, MAX_RESULTS);
+
+    if (top.length === 0) return [];
+
+    // Fetch OSRM walk geometries in parallel for all top candidates
+    const results = await Promise.all(top.map(c =>
+        c.kind === 'direct'
+            ? buildDirectResult(c.data, originLat, originLng, destLat, destLng)
+            : buildTransferResult(c.data, originLat, originLng, destLat, destLng)
+    ));
+
     return results.sort((a, b) => a.duration - b.duration);
 }
 

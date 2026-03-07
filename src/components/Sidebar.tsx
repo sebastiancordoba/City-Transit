@@ -5,7 +5,7 @@ import {
   Info, ArrowUpDown, Car, Bike, TramFront, Search, ChevronDown,
   ChevronUp, CornerUpRight, CornerUpLeft, MoveRight, CircleDot,
   Milestone, Flag, RotateCcw, List, ChevronRight, LocateFixed,
-  Clock, ZoomIn
+  Clock, ZoomIn, ArrowLeftRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { TransportMode } from '../App';
@@ -65,6 +65,7 @@ function InstructionIcon({ icon }: { icon: string }) {
   if (icon === 'bus') return <Bus className={cls} />;
   if (icon === 'ride') return <ArrowRight className={cls} />;
   if (icon === 'alight') return <MapPin className={cls} />;
+  if (icon === 'transfer') return <ArrowLeftRight className={cls} />;
   return <Milestone className={cls} />;
 }
 
@@ -163,7 +164,10 @@ function AlternativesStrip({ alts, selectedId, onSelect }: { alts: any[]; select
               className={`shrink-0 flex items-center gap-2 px-3 py-2 rounded-2xl border-2 transition-all active:scale-95 touch-manipulation text-left ${isSelected ? 'border-transparent shadow-md text-white' : 'border-gray-100 bg-gray-50 text-gray-700 hover:border-gray-200'
                 }`}
               style={isSelected ? { background: alt.routeColor || '#7c3aed' } : {}}>
-              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: isSelected ? 'white' : (alt.routeColor || '#7c3aed'), opacity: isSelected ? 0.8 : 1 }} />
+              {alt.isTransfer && alt.legs
+                ? <div className="flex gap-0.5 shrink-0">{alt.legs.map((l: any, li: number) => <div key={li} className="w-2 h-2 rounded-full" style={{ background: isSelected ? 'rgba(255,255,255,0.8)' : l.routeColor }} />)}</div>
+                : <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: isSelected ? 'white' : (alt.routeColor || '#7c3aed'), opacity: isSelected ? 0.8 : 1 }} />
+              }
               <div>
                 <p className={`text-[12px] font-black leading-none ${isSelected ? 'text-white' : 'text-gray-800'}`}>
                   {alt.routeName ?? 'Caminar'}
@@ -450,11 +454,18 @@ export default function Sidebar({
                 <span>Llegas ~{arrivalTime(route.duration)}</span>
               </div>
             </div>
-            {route.routeName && (
-              <span className="mt-1.5 inline-block text-[11px] font-bold px-2.5 py-0.5 rounded-full text-white" style={{ background: resultColor }}>
-                {route.routeName}
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              {route.routeName && (
+                <span className="inline-block text-[11px] font-bold px-2.5 py-0.5 rounded-full text-white" style={{ background: resultColor }}>
+                  {route.isTransfer ? route.routeName.split(' → ').join(' → ') : route.routeName}
+                </span>
+              )}
+              {route.isTransfer && route.legs && (
+                <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                  {route.legs.length} camiones
+                </span>
+              )}
+            </div>
           </div>
           <div className="p-3 rounded-2xl shrink-0" style={{ background: `${resultColor}18`, color: resultColor }}>
             <activeMode.Icon className="w-6 h-6" />

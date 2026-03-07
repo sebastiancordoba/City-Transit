@@ -1,5 +1,5 @@
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap, useMapEvents, ZoomControl } from 'react-leaflet';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import L from 'leaflet';
 import type { TransportMode } from '../App';
 
@@ -93,11 +93,46 @@ function MapUpdater({ origin, destination, route }: { origin: any; destination: 
       const bounds = L.latLngBounds([origin, destination]);
       if (route?.geometry) route.geometry.forEach((pt: [number, number]) => bounds.extend(pt));
       if (route?.routeSegmentGeometry) route.routeSegmentGeometry.forEach((pt: [number, number]) => bounds.extend(pt));
+      if (route?.isTransfer && route?.legs) {
+        for (const leg of route.legs) {
+          leg.routeSegmentGeometry?.forEach((pt: [number, number]) => bounds.extend(pt));
+        }
+      }
       map.fitBounds(bounds, { padding: [80, 80], animate: true, maxZoom: 16 });
     }
   }, [origin, destination, route, map]);
 
   return null;
+}
+
+// Marker icon helpers
+function stopDotIcon(color: string, size = 8) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="background:${color};width:${size}px;height:${size}px;border-radius:50%;border:2px solid rgba(255,255,255,0.9);box-shadow:0 1px 4px rgba(0,0,0,0.25)"></div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function boardAlightIcon(color: string) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="background:white;width:14px;height:14px;border-radius:50%;border:3px solid ${color};box-shadow:0 2px 6px rgba(0,0,0,0.2)"></div>`,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+  });
+}
+
+function transferIcon(colorA: string, colorB: string) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:18px;height:18px;border-radius:50%;background:white;border:3px solid ${colorA};box-shadow:0 2px 8px rgba(0,0,0,0.28);display:flex;align-items:center;justify-content:center">
+      <div style="width:8px;height:8px;border-radius:50%;background:${colorB}"></div>
+    </div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
 }
 
 // Style switcher overlay (sits on top-right of map)
@@ -202,91 +237,102 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
               />
             )}
 
-            {/* Transit route: walk segments + bus segment */}
-            {route.type === 'transit' && route.originStop && route.destStop && (
+            {/* Transit route: single-bus (direct) */}
+            {route.type === 'transit' && !route.isTransfer && route.originStop && route.destStop && (
               <>
                 <Polyline
                   positions={route.walkToGeometry ?? [origin!, [route.originStop.lat, route.originStop.lng]]}
                   color={mapStyle === 'dark' ? '#d1d5db' : '#9ca3af'}
-                  dashArray="1, 10"
-                  weight={5}
-                  opacity={0.85}
-                  lineCap="round"
+                  dashArray="1, 10" weight={5} opacity={0.85} lineCap="round"
                 />
-
                 {(route.routeSegmentGeometry?.length > 1) && (
                   <Polyline
                     positions={route.routeSegmentGeometry}
                     color={route.routeColor || '#7c3aed'}
-                    weight={6}
-                    opacity={0.9}
-                    lineCap="round"
-                    lineJoin="round"
+                    weight={6} opacity={0.9} lineCap="round" lineJoin="round"
                     className="route-line-animated"
                   />
                 )}
-
                 <Polyline
                   positions={route.walkFromGeometry ?? [[route.destStop.lat, route.destStop.lng], destination!]}
                   color={mapStyle === 'dark' ? '#d1d5db' : '#9ca3af'}
-                  dashArray="1, 10"
-                  weight={5}
-                  opacity={0.85}
-                  lineCap="round"
+                  dashArray="1, 10" weight={5} opacity={0.85} lineCap="round"
                 />
-
-                {/* Intermediate stop dots — with hover tooltip */}
                 {route.pathStops?.slice(1, -1).map((stop: any, i: number) => (
-                  <Marker
-                    key={`mid-${stop.id}-${i}`}
-                    position={[stop.lat, stop.lng]}
-                    icon={L.divIcon({
-                      className: '',
-                      html: `<div style="
-                        background: ${route.routeColor || '#7c3aed'};
-                        width: 8px; height: 8px;
-                        border-radius: 50%;
-                        border: 2px solid rgba(255,255,255,0.9);
-                        box-shadow: 0 1px 4px rgba(0,0,0,0.25);
-                      "></div>`,
-                      iconSize: [8, 8],
-                      iconAnchor: [4, 4],
-                    })}
-                  >
-                    <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>{stop.name}</span>
-                    </Tooltip>
+                  <Marker key={`mid-${stop.id}-${i}`} position={[stop.lat, stop.lng]} icon={stopDotIcon(route.routeColor || '#7c3aed')}>
+                    <Tooltip direction="top" offset={[0, -6]} opacity={0.95}><span style={{ fontSize: 12, fontWeight: 600 }}>{stop.name}</span></Tooltip>
                     <Popup>{stop.name}</Popup>
                   </Marker>
                 ))}
-
-                {/* Board/alight markers — large white ring, hover tooltip */}
                 {[route.originStop, route.destStop].map((stop: any, i: number) => (
-                  <Marker
-                    key={`${stop.id}-${i}`}
-                    position={[stop.lat, stop.lng]}
-                    icon={L.divIcon({
-                      className: 'stop-marker',
-                      html: `<div style="
-                        background: white;
-                        width: 14px; height: 14px;
-                        border-radius: 50%;
-                        border: 3px solid ${route.routeColor || '#7c3aed'};
-                        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-                      "></div>`,
-                      iconSize: [14, 14],
-                      iconAnchor: [7, 7],
-                    })}
-                  >
-                    <Tooltip direction="top" offset={[0, -10]} opacity={0.95} permanent={false}>
-                      <span style={{ fontSize: 12, fontWeight: 700 }}>
-                        {i === 0 ? '🛑 Abordaje' : '📍 Bajada'}: {stop.name}
-                      </span>
+                  <Marker key={`ba-${stop.id}-${i}`} position={[stop.lat, stop.lng]} icon={boardAlightIcon(route.routeColor || '#7c3aed')}>
+                    <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>{i === 0 ? '🛑 Abordaje' : '📍 Bajada'}: {stop.name}</span>
                     </Tooltip>
                     <Popup>{stop.name}</Popup>
                   </Marker>
                 ))}
               </>
+            )}
+
+            {/* Transit route: multi-bus (transfer) */}
+            {route.type === 'transit' && route.isTransfer && route.legs?.map((leg: any, i: number) => {
+              const walkColor = mapStyle === 'dark' ? '#d1d5db' : '#9ca3af';
+              const prevAlight: [number, number] = i === 0
+                ? origin!
+                : [route.legs[i - 1].destStop.lat, route.legs[i - 1].destStop.lng];
+              const isLastLeg = i === route.legs.length - 1;
+              const nextColor = !isLastLeg ? route.legs[i + 1].routeColor : '';
+              return (
+                <Fragment key={`leg-${i}`}>
+                  {/* Walk to this leg's boarding stop */}
+                  <Polyline
+                    positions={leg.walkGeometry ?? [prevAlight, [leg.originStop.lat, leg.originStop.lng]]}
+                    color={walkColor} dashArray="1, 10" weight={5} opacity={0.85} lineCap="round"
+                  />
+                  {/* Bus segment */}
+                  {leg.routeSegmentGeometry?.length > 1 && (
+                    <Polyline
+                      positions={leg.routeSegmentGeometry}
+                      color={leg.routeColor} weight={6} opacity={0.9}
+                      lineCap="round" lineJoin="round" className="route-line-animated"
+                    />
+                  )}
+                  {/* Intermediate stop dots */}
+                  {leg.pathStops?.slice(1, -1).map((stop: any, j: number) => (
+                    <Marker key={`dot-${i}-${j}`} position={[stop.lat, stop.lng]} icon={stopDotIcon(leg.routeColor)}>
+                      <Tooltip direction="top" offset={[0, -6]} opacity={0.95}><span style={{ fontSize: 12, fontWeight: 600 }}>{stop.name}</span></Tooltip>
+                    </Marker>
+                  ))}
+                  {/* Boarding marker */}
+                  <Marker position={[leg.originStop.lat, leg.originStop.lng]} icon={boardAlightIcon(leg.routeColor)}>
+                    <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>🛑 Abordaje: {leg.originStop.name}</span>
+                    </Tooltip>
+                    <Popup>{leg.originStop.name}</Popup>
+                  </Marker>
+                  {/* Alighting marker: transfer icon between buses, regular alight for last */}
+                  <Marker
+                    position={[leg.destStop.lat, leg.destStop.lng]}
+                    icon={!isLastLeg ? transferIcon(leg.routeColor, nextColor) : boardAlightIcon(leg.routeColor)}
+                  >
+                    <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>
+                        {!isLastLeg ? `🔄 Transbordo: ${leg.destStop.name}` : `📍 Bajada: ${leg.destStop.name}`}
+                      </span>
+                    </Tooltip>
+                    <Popup>{leg.destStop.name}</Popup>
+                  </Marker>
+                </Fragment>
+              );
+            })}
+            {/* Final walk for transfer routes */}
+            {route.type === 'transit' && route.isTransfer && route.legs && (
+              <Polyline
+                positions={route.walkFromGeometry ?? [[route.legs.at(-1).destStop.lat, route.legs.at(-1).destStop.lng], destination!]}
+                color={mapStyle === 'dark' ? '#d1d5db' : '#9ca3af'}
+                dashArray="1, 10" weight={5} opacity={0.85} lineCap="round"
+              />
             )}
 
             {/* Transit direct_walk type */}
