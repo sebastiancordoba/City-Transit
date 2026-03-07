@@ -3,7 +3,7 @@ import Map from './components/Map';
 import type { MapStyleId } from './components/Map';
 import Sidebar from './components/Sidebar';
 import { findTransitRoutes, fetchOSRMRoute, loadRoutesData } from './lib/transitRouter';
-import type { OsrmProfile } from './lib/transitRouter';
+import type { OsrmProfile, RoutePreview } from './lib/transitRouter';
 
 export type TransportMode = 'walking' | 'bicycle' | 'car' | 'transit';
 
@@ -23,11 +23,10 @@ export default function App() {
   const [transitAlts, setTransitAlts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // When transit finds 0 results at this radius, we offer to expand
   const [noRoutesRadius, setNoRoutesRadius] = useState<number | null>(null);
   const [mode, setMode] = useState<TransportMode>('transit');
   const [mapStyle, setMapStyle] = useState<MapStyleId>('streets');
-  const [previewRoute, setPreviewRoute] = useState<{ geometry: [number, number][]; color: string; name: string } | null>(null);
+  const [previewRoute, setPreviewRoute] = useState<RoutePreview | null>(null);
   const autoSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { loadRoutesData().catch(() => { }); }, []);
@@ -54,7 +53,6 @@ export default function App() {
       if (currentMode === 'transit') {
         const results = await findTransitRoutes(orig[0], orig[1], dest[0], dest[1], radius);
         if (!results.length) {
-          // No results → offer expanding radius instead of an error
           setNoRoutesRadius(radius);
         } else {
           setTransitAlts(results);
@@ -73,13 +71,11 @@ export default function App() {
     }
   }, []);
 
-  // Called when the user taps "Ampliar búsqueda"
   const handleExpandRadius = useCallback(() => {
     if (!origin || !destination || noRoutesRadius == null) return;
     const nextIdx = RADIUS_STEPS.indexOf(noRoutesRadius) + 1;
     const nextRadius = RADIUS_STEPS[nextIdx] ?? RADIUS_STEPS[RADIUS_STEPS.length - 1];
     if (nextRadius === noRoutesRadius) {
-      // Already at max — show a real error
       setError('No se encontraron rutas de camión incluso ampliando el radio a 3 km. Prueba con otro destino.');
       setNoRoutesRadius(null);
       return;
@@ -95,7 +91,13 @@ export default function App() {
     else { setOrigin([lat, lng]); setDestination(null); resetResults(); }
   };
 
-  const resetResults = () => { setRoute(null); setTransitAlts([]); setError(null); setNoRoutesRadius(null); setPreviewRoute(null); };
+  const resetResults = () => {
+    setRoute(null);
+    setTransitAlts([]);
+    setError(null);
+    setNoRoutesRadius(null);
+    setPreviewRoute(null);
+  };
 
   const handleSelectPlace = (lat: number, lng: number, _label: string, field: 'origin' | 'destination') => {
     resetResults();

@@ -1,5 +1,6 @@
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, useMap, useMapEvents, ZoomControl } from 'react-leaflet';
 import { useEffect, useState, Fragment } from 'react';
+import type { RoutePreview } from '../lib/transitRouter';
 import L from 'leaflet';
 import type { TransportMode } from '../App';
 
@@ -171,12 +172,12 @@ function StyleSwitcher({ activeStyle, onChange }: { activeStyle: MapStyleId; onC
   );
 }
 
+// ── Preview route fitter ─────────────────────────────────────────────────────
 function PreviewFitter({ geometry }: { geometry: [number, number][] }) {
   const map = useMap();
   useEffect(() => {
     if (geometry.length < 2) return;
-    const bounds = L.latLngBounds(geometry);
-    map.fitBounds(bounds, { padding: [80, 80], animate: true, maxZoom: 16 });
+    map.fitBounds(L.latLngBounds(geometry), { padding: [80, 80], animate: true, maxZoom: 16 });
   }, [geometry, map]);
   return null;
 }
@@ -190,7 +191,7 @@ interface MapProps {
   onMapClick?: (lat: number, lng: number) => void;
   mapStyle: MapStyleId;
   onMapStyleChange: (id: MapStyleId) => void;
-  previewRoute?: { geometry: [number, number][]; color: string; name: string } | null;
+  previewRoute?: RoutePreview | null;
 }
 
 export default function Map({ origin, destination, route, mode, onMapClick, mapStyle, onMapStyleChange, previewRoute }: MapProps) {
@@ -209,7 +210,6 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
       >
         <ZoomControl position="bottomright" />
         <MapUpdater origin={origin} destination={destination} route={route} />
-        {!route && previewRoute && <PreviewFitter geometry={previewRoute.geometry} />}
         <MapEvents onClick={onMapClick} />
 
         <TileLayer
@@ -360,16 +360,27 @@ export default function Map({ origin, destination, route, mode, onMapClick, mapS
             )}
           </>
         )}
-        {/* Preview route (route browser click) — only when no routing result */}
-        {!route && previewRoute && previewRoute.geometry.length > 1 && (
-          <Polyline
-            positions={previewRoute.geometry}
-            color={previewRoute.color}
-            weight={6}
-            opacity={0.85}
-            lineCap="round"
-            lineJoin="round"
-          />
+
+        {/* ── Route browser preview ── */}
+        {!route && previewRoute && (
+          <>
+            <PreviewFitter geometry={previewRoute.geometry} />
+            <Polyline
+              positions={previewRoute.geometry}
+              color={previewRoute.color}
+              weight={6}
+              opacity={0.85}
+              lineCap="round"
+              lineJoin="round"
+            />
+            {previewRoute.stops.map((s, i) => (
+              <Marker key={`prev-${i}`} position={[s.lat, s.lng]} icon={stopDotIcon(previewRoute.color, 8)}>
+                <Tooltip direction="top" offset={[0, -6]} opacity={0.95} sticky={false}>
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>Parada {i + 1}</span>
+                </Tooltip>
+              </Marker>
+            ))}
+          </>
         )}
       </MapContainer>
 

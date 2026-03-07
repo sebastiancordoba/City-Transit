@@ -55,7 +55,7 @@ export const ROUTE_NAMES: Record<number, string> = {
   50: 'Clavijero - Revolución - El Moral',
   51: 'Col Higueras - Lázaro Cárdenas - Centro - Zona UV',
   52: 'Zona UV - Centro - Lázaro Cárdenas - Higueras',
-  53: 'Sefiplan - Lazaro Cardenas - Cto.Presidentes - Ruiz Cortinez',
+  53: 'Sefiplan - Lazaro Cardenas - Cto. Presidentes - Ruiz Cortinez',
   54: 'Reforma - Mercado - Sumidero',
   55: 'Sumidero - Mercado - Reforma',
   56: 'Campo de Tiro - Av. Xalapa - Av. México - Clavijero',
@@ -156,3 +156,11 @@ export const ROUTE_NAMES: Record<number, string> = {
   151: 'Higueras - Mercado',
   152: 'Circuito Presidentes - Rebsamen - Xalapa 2000 - Arco Sur - Trancas - Lazaro Cardenas - Ruiz Cortinez - Sauces - Velódromo',
 };
+
+/** Extract "first stop → last stop" from an official route name */
+export function parseEndpoints(name: string): [string, string] | null {
+  const clean = name.replace(/\s*\|.*$/, '').trim();
+  const parts = clean.split(' - ').map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  return [parts[0], parts[parts.length - 1]];
+}

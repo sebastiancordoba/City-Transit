@@ -10,7 +10,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import type { TransportMode } from '../App';
 import { getAllRoutes } from '../lib/transitRouter';
-import { ROUTE_NAMES } from '../lib/routeNames';
+import type { RoutePreview } from '../lib/transitRouter';
 
 interface SidebarProps {
   origin: [number, number] | null;
@@ -29,7 +29,7 @@ interface SidebarProps {
   onClearField?: (field: 'origin' | 'destination') => void;
   onSelectAlt?: (idx: number) => void;
   onExpandRadius?: () => void;
-  onPreviewRoute?: (r: { geometry: [number, number][]; color: string; name: string } | null) => void;
+  onPreviewRoute?: (r: RoutePreview | null) => void;
 }
 
 const MODES: { id: TransportMode; label: string; Icon: any; color: string; bg: string }[] = [
@@ -186,46 +186,54 @@ function AlternativesStrip({ alts, selectedId, onSelect }: { alts: any[]; select
   );
 }
 
+/** Parse "A / B / C" or "A - B - C" → ["A", "C"] */
+function parseEndpoints(desc: string | null): [string, string] | null {
+  if (!desc) return null;
+  const sep = desc.includes('/') ? '/' : ' - ';
+  const parts = desc.split(sep).map(s => s.replace(/\|.*$/, '').trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  return [parts[0], parts[parts.length - 1]];
+}
+
 // ── Route Browser ──────────────────────────────────────────────────────────
-function RouteBrowser({ onPreviewRoute }: { onPreviewRoute?: (r: { geometry: [number, number][]; color: string; name: string } | null) => void }) {
+function RouteBrowser({ onPreviewRoute }: { onPreviewRoute?: (r: RoutePreview | null) => void }) {
   const [routes, setRoutes] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
   const [fetched, setFetched] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [activeId, setActiveId] = useState<number | null>(null);
 
   useEffect(() => {
-    if (open && !fetched) { setFetched(true); getAllRoutes().then(setRoutes).catch(() => { }); }
+    if (open && !fetched) { setFetched(true); getAllRoutes().then(setRoutes).catch(() => {}); }
   }, [open, fetched]);
 
-  const handleSelect = (r: any) => {
-    const officialName = ROUTE_NAMES[r.routeNumber] ? `Ruta ${r.routeNumber}` : r.name;
-    if (selectedId === r.id) {
-      setSelectedId(null);
+  const handleToggle = () => {
+    if (open) { setActiveId(null); onPreviewRoute?.(null); }
+    setOpen(o => !o);
+  };
+
+  const handleSelect = (r: any, idx: number) => {
+    if (activeId === r.id) {
+      setActiveId(null);
       onPreviewRoute?.(null);
     } else {
-      setSelectedId(r.id);
-      onPreviewRoute?.({ geometry: r.geometry, color: r.color, name: officialName });
+      setActiveId(r.id);
+      onPreviewRoute?.({ geometry: r.geometry, color: r.color, name: `Ruta ${idx + 1}`, stops: r.stops });
       vibrate(8);
     }
   };
 
-  // Group routes by routeNumber to show each number once with sub-entries for ida/vuelta
-  const grouped = routes.reduce<Map<number, any[]>>((acc, r) => {
-    if (!acc.has(r.routeNumber)) acc.set(r.routeNumber, []);
-    acc.get(r.routeNumber)!.push(r);
-    return acc;
-  }, new Map());
-
   return (
     <div className="rounded-3xl shadow-lg overflow-hidden pointer-events-auto bg-white/96">
-      <button onClick={() => { setOpen(o => !o); if (open) { setSelectedId(null); onPreviewRoute?.(null); } }} className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors touch-manipulation">
+      <button onClick={handleToggle} className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors touch-manipulation">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center">
             <List className="w-4 h-4 text-purple-600" />
           </div>
           <div className="text-left">
             <p className="text-[13px] font-black text-gray-800">Rutas de Xalapa</p>
-            <p className="text-[11px] text-gray-400 font-medium">{routes.length > 0 ? `${grouped.size} rutas disponibles` : 'Todas las rutas de camión'}</p>
+            <p className="text-[11px] text-gray-400 font-medium">
+              {routes.length > 0 ? `${routes.length} rutas disponibles` : 'Todas las rutas de camión'}
+            </p>
           </div>
         </div>
         {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -239,41 +247,30 @@ function RouteBrowser({ onPreviewRoute }: { onPreviewRoute?: (r: { geometry: [nu
                   <div className="w-4 h-4 border-2 border-gray-200 border-t-purple-500 rounded-full animate-spin" />
                   Cargando rutas…
                 </div>
-              ) : Array.from(grouped.entries()).map(([num, variants]) => {
-                const officialName = ROUTE_NAMES[num];
+              ) : routes.map((r, idx) => {
+                const isActive = activeId === r.id;
+                const endpoints = parseEndpoints(r.description);
                 return (
-                  <div key={num}>
-                    {variants.map((r, vi) => {
-                      const isSelected = selectedId === r.id;
-                      const isMultiVariant = variants.length > 1;
-                      const variantLabel = isMultiVariant
-                        ? (r.fileKey.includes('ida') ? 'IDA' : r.fileKey.includes('vuelta') ? 'VUELTA' : r.fileKey.includes('a') ? 'A' : 'B')
-                        : null;
-                      return (
-                        <button
-                          key={r.id}
-                          onClick={() => handleSelect(r)}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors touch-manipulation ${isSelected ? 'bg-purple-50' : 'hover:bg-gray-50 active:bg-gray-100'} ${vi > 0 ? 'border-t border-gray-50' : ''}`}
-                        >
-                          <div className="w-3 h-3 rounded-full shrink-0 ring-2 ring-white shadow-sm" style={{ background: r.color }} />
-                          <div className="min-w-0 flex-1">
-                            {vi === 0 && (
-                              <p className="text-[13px] font-bold text-gray-800 truncate">
-                                Ruta {num}{officialName ? '' : ` · ${r.description || r.name}`}
-                              </p>
-                            )}
-                            {vi === 0 && officialName && (
-                              <p className="text-[11px] text-gray-500 truncate font-medium">{officialName}</p>
-                            )}
-                            {isMultiVariant && variantLabel && (
-                              <p className="text-[10px] font-bold text-gray-400 uppercase">{variantLabel}</p>
-                            )}
-                          </div>
-                          {isSelected && <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: r.color }} />}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <button
+                    key={r.id}
+                    onClick={() => handleSelect(r, idx)}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors touch-manipulation border-b border-gray-50 last:border-0 ${isActive ? 'bg-purple-50' : 'hover:bg-gray-50 active:bg-gray-100'}`}
+                  >
+                    <div className="flex flex-col items-center gap-1 shrink-0">
+                      <div className="w-3 h-3 rounded-full ring-2 ring-white shadow-sm" style={{ background: r.color }} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-bold text-gray-800">Ruta {idx + 1}</p>
+                      {endpoints ? (
+                        <p className="text-[11px] text-gray-500 font-medium truncate">
+                          {endpoints[0]} <span className="text-gray-300 mx-0.5">→</span> {endpoints[1]}
+                        </p>
+                      ) : r.description ? (
+                        <p className="text-[11px] text-gray-400 truncate">{r.description}</p>
+                      ) : null}
+                    </div>
+                    {isActive && <div className="w-1.5 h-5 rounded-full shrink-0" style={{ background: r.color }} />}
+                  </button>
                 );
               })}
             </div>

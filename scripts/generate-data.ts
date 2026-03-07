@@ -86,7 +86,6 @@ for (const [key, { route, stops }] of groups) {
     if (!route) continue;
 
     const routeGeoJSON = JSON.parse(fs.readFileSync(path.join(ROUTES_DIR, route), 'utf8'));
-    // Extract route number from the file key (e.g. "003_ida" → 3, "034a" → 34)
     const routeNumMatch = key.match(/^(\d+)/);
     const routeNumber = routeNumMatch ? parseInt(routeNumMatch[1]) : 0;
 

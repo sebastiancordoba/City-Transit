@@ -541,9 +541,36 @@ export async function findTransitRoute(
 }
 
 
-export async function getAllRoutes(): Promise<{ id: number; routeNumber: number; fileKey: string; name: string; description: string | null; color: string; geometry: [number, number][] }[]> {
+export interface RoutePreview {
+    geometry: [number, number][];
+    color: string;
+    name: string;
+    stops: { lat: number; lng: number; seq: number }[];
+}
+
+export interface RouteListItem {
+    id: number;
+    routeNumber: number;
+    fileKey: string;
+    name: string;
+    description: string | null;
+    color: string;
+    geometry: [number, number][];
+    stops: { id: number; lat: number; lng: number; seq: number }[];
+}
+
+export async function getAllRoutes(): Promise<RouteListItem[]> {
     const routes = await loadRoutesData();
     return routes
-        .map(r => ({ id: r.id, routeNumber: r.routeNumber, fileKey: r.fileKey, name: r.name, description: r.description, color: r.color, geometry: r.geometry }))
+        .map(r => ({
+            id: r.id,
+            routeNumber: r.routeNumber,
+            fileKey: r.fileKey,
+            name: r.name,
+            description: r.description,
+            color: r.color,
+            geometry: r.geometry,
+            stops: r.stops.map(s => ({ id: s.id, lat: s.lat, lng: s.lng, seq: s.seq })),
+        }))
         .sort((a, b) => a.routeNumber - b.routeNumber || a.fileKey.localeCompare(b.fileKey));
 }
