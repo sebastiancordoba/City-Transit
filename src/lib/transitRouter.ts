@@ -359,12 +359,17 @@ async function buildDirectResult(
     const { route, oStop, dStop, walkTo, walkFrom, oi, di } = c;
     const transitStops = di - oi;
     const pathStops: StopRecord[] = route.stops.slice(oi, di + 1);
-    const geometry = clampGeometry(route.geometry, oStop.lat, oStop.lng, dStop.lat, dStop.lng);
 
-    const [walkToRes, walkFromRes] = await Promise.allSettled([
+    const [walkToRes, walkFromRes, busRouteRes] = await Promise.allSettled([
         fetchOSRMRoute('foot', originLat, originLng, oStop.lat, oStop.lng),
         fetchOSRMRoute('foot', dStop.lat, dStop.lng, destLat, destLng),
+        fetchOSRMRoute('car', oStop.lat, oStop.lng, dStop.lat, dStop.lng),
     ]);
+
+    // Use road-snapped geometry when available, fall back to raw shapefile slice
+    const geometry = busRouteRes.status === 'fulfilled'
+        ? busRouteRes.value.geometry
+        : clampGeometry(route.geometry, oStop.lat, oStop.lng, dStop.lat, dStop.lng);
 
     const walkToGeometry = walkToRes.status === 'fulfilled' ? walkToRes.value.geometry : null;
     const walkFromGeometry = walkFromRes.status === 'fulfilled' ? walkFromRes.value.geometry : null;
@@ -407,18 +412,21 @@ async function buildTransferResult(
 ) {
     const { legs, finalWalkFrom } = tc;
 
-    // Fetch OSRM for all walk segments in parallel:
-    // [origin → leg0.board, leg0.alight → leg1.board, ..., lastAlight → dest]
+    // Fetch OSRM for all walk and bus segments in parallel
     const walkFetches = legs.map((leg, i) => {
         const fromLat = i === 0 ? originLat : legs[i - 1].alightStop.lat;
         const fromLng = i === 0 ? originLng : legs[i - 1].alightStop.lng;
         return fetchOSRMRoute('foot', fromLat, fromLng, leg.boardStop.lat, leg.boardStop.lng);
     });
+    const busFetches = legs.map(leg =>
+        fetchOSRMRoute('car', leg.boardStop.lat, leg.boardStop.lng, leg.alightStop.lat, leg.alightStop.lng)
+    );
     const lastAlight = legs[legs.length - 1].alightStop;
     const finalWalkFetch = fetchOSRMRoute('foot', lastAlight.lat, lastAlight.lng, destLat, destLng);
 
-    const [legWalkResults, finalWalkRes] = await Promise.all([
+    const [legWalkResults, busGeoResults, finalWalkRes] = await Promise.all([
         Promise.allSettled(walkFetches),
+        Promise.allSettled(busFetches),
         finalWalkFetch.catch(() => null),
     ]);
 
@@ -432,12 +440,17 @@ async function buildTransferResult(
         const busDur = (transitStops * 300) / (28000 / 3600);
         totalDuration += walkDur + busDur;
 
+        const busGeoRes = busGeoResults[i];
+        const routeSegmentGeometry = busGeoRes.status === 'fulfilled'
+            ? busGeoRes.value.geometry
+            : clampGeometry(leg.route.geometry, leg.boardStop.lat, leg.boardStop.lng, leg.alightStop.lat, leg.alightStop.lng);
+
         return {
             routeId: leg.route.id,
             routeName: leg.route.name,
             routeDescription: leg.route.description,
             routeColor: leg.route.color,
-            routeSegmentGeometry: clampGeometry(leg.route.geometry, leg.boardStop.lat, leg.boardStop.lng, leg.alightStop.lat, leg.alightStop.lng),
+            routeSegmentGeometry,
             walkGeometry,
             walkDuration: walkDur,
             walkDistance: walkDist,
