@@ -22,8 +22,31 @@ const PALETTE = [
 function lineStringToLatLng(coords: number[][]): [number, number][] {
     return coords.map(([lng, lat]) => [lat, lng]);
 }
+
+/** Sort MultiLineString segments into a spatially continuous chain. */
+function sortSegments(ca: number[][][]): number[][][] {
+    if (ca.length <= 1) return ca;
+    const result: number[][][] = [ca[0]];
+    const remaining = ca.slice(1);
+    while (remaining.length > 0) {
+        const tail = result[result.length - 1];
+        const lastPt = tail[tail.length - 1];
+        let bestIdx = 0, bestDist = Infinity, bestReverse = false;
+        for (let i = 0; i < remaining.length; i++) {
+            const seg = remaining[i];
+            const df = Math.hypot(lastPt[0] - seg[0][0], lastPt[1] - seg[0][1]);
+            const db = Math.hypot(lastPt[0] - seg[seg.length - 1][0], lastPt[1] - seg[seg.length - 1][1]);
+            if (df < bestDist) { bestDist = df; bestIdx = i; bestReverse = false; }
+            if (db < bestDist) { bestDist = db; bestIdx = i; bestReverse = true; }
+        }
+        const seg = remaining.splice(bestIdx, 1)[0];
+        result.push(bestReverse ? [...seg].reverse() : seg);
+    }
+    return result;
+}
+
 function multiLineStringToLatLng(ca: number[][][]): [number, number][] {
-    return ca.flatMap(c => c.map(([lng, lat]) => [lat, lng] as [number, number]));
+    return sortSegments(ca).flatMap(c => c.map(([lng, lat]) => [lat, lng] as [number, number]));
 }
 function extractGeometry(feature: any): [number, number][] {
     const g = feature.geometry;

@@ -79,17 +79,37 @@ function clampGeometry(
     endLat: number, endLng: number
 ): [number, number][] {
     if (geometry.length === 0) return [];
-    let si = 0, ei = geometry.length - 1;
-    let minS = Infinity, minE = Infinity;
+
+    // 1. Find closest geometry point to the start stop
+    let si = 0, minS = Infinity;
     for (let i = 0; i < geometry.length; i++) {
         const [lat, lng] = geometry[i];
         const ds = haversine(lat, lng, startLat, startLng);
-        const de = haversine(lat, lng, endLat, endLng);
         if (ds < minS) { minS = ds; si = i; }
+    }
+
+    // 2. Search FORWARD from si for the end stop — avoids picking a point behind the origin
+    let ei = si, minE = Infinity;
+    for (let i = si; i < geometry.length; i++) {
+        const [lat, lng] = geometry[i];
+        const de = haversine(lat, lng, endLat, endLng);
         if (de < minE) { minE = de; ei = i; }
     }
-    if (si <= ei) return geometry.slice(si, ei + 1);
-    return [...geometry.slice(ei, si + 1)].reverse();
+
+    // 3. If forward search gave a meaningful segment, use it
+    if (ei > si) return geometry.slice(si, ei + 1);
+
+    // 4. Fall back: search the full array (route geometry stored in reverse direction)
+    let ei2 = 0, minE2 = Infinity;
+    for (let i = 0; i < geometry.length; i++) {
+        const [lat, lng] = geometry[i];
+        const de = haversine(lat, lng, endLat, endLng);
+        if (de < minE2) { minE2 = de; ei2 = i; }
+    }
+    if (ei2 < si) return [...geometry.slice(ei2, si + 1)].reverse();
+
+    // Same point or degenerate — return single point
+    return [geometry[si]];
 }
 
 // Each transport mode uses a DIFFERENT public routing server.
@@ -158,6 +178,7 @@ export async function fetchOSRMRoute(
 const MAX_RESULTS = 5;
 const MAX_TRANSFER_WALK = 400; // metres between alighting stop A and boarding stop B
 const MAX_TRANSFERS = 2;       // up to 3 buses total
+const MIN_STOPS_PER_LEG = 3;   // each bus leg must cover at least this many stops
 
 // ── Direct single-bus candidates ──────────────────────────────────────────────
 
@@ -285,7 +306,7 @@ function findMultiLegCandidates(
                 const newUsed = new Set(path.usedRouteIds);
                 newUsed.add(route.id);
 
-                for (let di = boardIdx + 1; di < route.stops.length; di++) {
+                for (let di = boardIdx + MIN_STOPS_PER_LEG; di < route.stops.length; di++) {
                     const alightStop = route.stops[di];
                     const transitStops = di - boardIdx;
                     const legEst = estLegDuration(walkToBoard, transitStops);
