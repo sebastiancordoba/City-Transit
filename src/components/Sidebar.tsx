@@ -12,14 +12,32 @@ import type { TransportMode } from '../App';
 import { getAllRoutes } from '../lib/transitRouter';
 import type { RoutePreview } from '../lib/transitRouter';
 
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=es&zoom=18`
+    );
+    const d = await res.json();
+    const a = d.address || {};
+    if (a.road) return `${a.road}${a.house_number ? ' ' + a.house_number : ''}`;
+    if (a.neighbourhood) return a.neighbourhood;
+    if (a.suburb) return a.suburb;
+  } catch { }
+  return 'Mi ubicación';
+}
+
 interface SidebarProps {
   origin: [number, number] | null;
   destination: [number, number] | null;
+  originLabel: string;
+  destLabel: string;
+  onOriginLabelChange: (label: string) => void;
+  onDestLabelChange: (label: string) => void;
   route: any | null;
   transitAlts: any[];           // all transit alternatives (sorted by duration)
   loading: boolean;
   error: string | null;
-  noRoutesRadius: number | null; // set when transit found 0 results at this radius
+  noRoutesRadius: number | null;
   mode: TransportMode;
   onModeChange: (mode: TransportMode) => void;
   onFindRoute: () => void;
@@ -296,31 +314,18 @@ function CompactModeBar({ mode, onModeChange }: { mode: TransportMode; onModeCha
   );
 }
 
-// ── GPS reverse geocode ────────────────────────────────────────────────────
-async function reverseGeocode(lat: number, lng: number): Promise<string> {
-  try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=es&zoom=18`);
-    const d = await res.json();
-    const a = d.address || {};
-    if (a.road) return `${a.road}${a.house_number ? ' ' + a.house_number : ''}`;
-    if (a.neighbourhood) return a.neighbourhood;
-    if (a.suburb) return a.suburb;
-  } catch { }
-  return 'Mi ubicación';
-}
 
 type SheetState = 'peek' | 'half' | 'full';
 const SHEET_H: Record<SheetState, string> = { peek: '265px', half: '55vh', full: '92vh' };
 
 // ── Main Sidebar ───────────────────────────────────────────────────────────
 export default function Sidebar({
-  origin, destination, route, transitAlts, loading, error, noRoutesRadius,
+  origin, destination, originLabel, destLabel, onOriginLabelChange, onDestLabelChange,
+  route, transitAlts, loading, error, noRoutesRadius,
   mode, onModeChange, onFindRoute, onClear, onSwap, onSelectPlace,
   onClearField, onSelectAlt, onExpandRadius, onPreviewRoute,
 }: SidebarProps) {
   const activeMode = MODES.find(m => m.id === mode)!;
-  const [originLabel, setOriginLabel] = useState('');
-  const [destLabel, setDestLabel] = useState('');
   const [sheet, setSheet] = useState<SheetState>('peek');
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState('');
@@ -334,8 +339,6 @@ export default function Sidebar({
     return () => vv.removeEventListener('resize', h);
   }, []);
 
-  useEffect(() => { if (!origin) setOriginLabel(''); }, [origin]);
-  useEffect(() => { if (!destination) setDestLabel(''); }, [destination]);
   useEffect(() => { if (route || noRoutesRadius) setSheet('half'); }, [route, noRoutesRadius]);
   useEffect(() => { if ((origin || destination) && sheet === 'peek') setSheet('half'); }, [origin, destination]);
 
@@ -354,8 +357,8 @@ export default function Sidebar({
     else setSheet(s => s === 'full' ? 'half' : 'peek');
   }, []);
 
-  const handleOrigin = (lat: number, lng: number, label: string) => { setOriginLabel(label); onSelectPlace?.(lat, lng, label, 'origin'); };
-  const handleDest = (lat: number, lng: number, label: string) => { setDestLabel(label); onSelectPlace?.(lat, lng, label, 'destination'); };
+  const handleOrigin = (lat: number, lng: number, label: string) => { onOriginLabelChange(label); onSelectPlace?.(lat, lng, label, 'origin'); };
+  const handleDest = (lat: number, lng: number, label: string) => { onDestLabelChange(label); onSelectPlace?.(lat, lng, label, 'destination'); };
 
   const handleLocate = async () => {
     setGpsError('');
@@ -365,7 +368,7 @@ export default function Sidebar({
       async pos => {
         vibrate(15);
         const label = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
-        setOriginLabel(label);
+        onOriginLabelChange(label);
         onSelectPlace?.(pos.coords.latitude, pos.coords.longitude, label, 'origin');
         setGpsLoading(false);
       },
@@ -402,7 +405,7 @@ export default function Sidebar({
             placeholder="Origen (o toca el mapa)"
             value={origin ? (originLabel || `${origin[0].toFixed(4)}, ${origin[1].toFixed(4)}`) : ''}
             onSelect={handleOrigin}
-            onClear={() => { setOriginLabel(''); onClearField?.('origin'); }}
+            onClear={() => { onOriginLabelChange(''); onClearField?.('origin'); }}
             onLocate={handleLocate}
             showLocate
             dropUp={keyboardOpen}
@@ -411,7 +414,7 @@ export default function Sidebar({
             placeholder="Destino (o toca el mapa)"
             value={destination ? (destLabel || `${destination[0].toFixed(4)}, ${destination[1].toFixed(4)}`) : ''}
             onSelect={handleDest}
-            onClear={() => { setDestLabel(''); onClearField?.('destination'); }}
+            onClear={() => { onDestLabelChange(''); onClearField?.('destination'); }}
             dropUp={keyboardOpen}
           />
         </div>

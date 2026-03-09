@@ -13,12 +13,28 @@ const OSRM_PROFILES: Record<string, OsrmProfile> = {
   car: 'car',
 };
 
-// Walk radius steps (metres) that the user can expand to
 const RADIUS_STEPS = [1000, 1500, 2000, 3000];
+
+// ── Reverse geocode ────────────────────────────────────────────────────────
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=es&zoom=18`
+    );
+    const d = await res.json();
+    const a = d.address || {};
+    if (a.road) return `${a.road}${a.house_number ? ' ' + a.house_number : ''}`;
+    if (a.neighbourhood) return a.neighbourhood;
+    if (a.suburb) return a.suburb;
+  } catch { }
+  return 'Mi ubicación';
+}
 
 export default function App() {
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [destination, setDestination] = useState<[number, number] | null>(null);
+  const [originLabel, setOriginLabel] = useState('');
+  const [destLabel, setDestLabel] = useState('');
   const [route, setRoute] = useState<any | null>(null);
   const [transitAlts, setTransitAlts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -30,6 +46,10 @@ export default function App() {
   const autoSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { loadRoutesData().catch(() => { }); }, []);
+
+  // Clear labels when coordinates are cleared externally
+  useEffect(() => { if (!origin) setOriginLabel(''); }, [origin]);
+  useEffect(() => { if (!destination) setDestLabel(''); }, [destination]);
 
   // Auto-search 900ms after both points are set
   useEffect(() => {
@@ -83,13 +103,40 @@ export default function App() {
     doFindRoute(origin, destination, mode, nextRadius);
   }, [origin, destination, mode, noRoutesRadius, doFindRoute]);
 
-  const handleMapClick = (lat: number, lng: number) => {
+  const handleMapClick = useCallback(async (lat: number, lng: number) => {
     try { navigator.vibrate?.(10); } catch { }
-    if (route) { setOrigin([lat, lng]); setDestination(null); resetResults(); return; }
-    if (!origin) { setOrigin([lat, lng]); }
-    else if (!destination) { setDestination([lat, lng]); }
-    else { setOrigin([lat, lng]); setDestination(null); resetResults(); }
-  };
+
+    let field: 'origin' | 'destination';
+
+    if (route) {
+      // Reset flow: new origin, clear destination
+      setOrigin([lat, lng]);
+      setOriginLabel('');
+      setDestination(null);
+      resetResults();
+      field = 'origin';
+    } else if (!origin) {
+      setOrigin([lat, lng]);
+      setOriginLabel('');
+      field = 'origin';
+    } else if (!destination) {
+      setDestination([lat, lng]);
+      setDestLabel('');
+      field = 'destination';
+    } else {
+      setOrigin([lat, lng]);
+      setOriginLabel('');
+      setDestination(null);
+      resetResults();
+      field = 'origin';
+    }
+
+    // Reverse geocode in background — update label when ready
+    const label = await reverseGeocode(lat, lng);
+    if (field === 'origin') setOriginLabel(label);
+    else setDestLabel(label);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [origin, destination, route]);
 
   const resetResults = () => {
     setRoute(null);
@@ -99,16 +146,16 @@ export default function App() {
     setPreviewRoute(null);
   };
 
-  const handleSelectPlace = (lat: number, lng: number, _label: string, field: 'origin' | 'destination') => {
+  const handleSelectPlace = (lat: number, lng: number, label: string, field: 'origin' | 'destination') => {
     resetResults();
-    if (field === 'origin') setOrigin([lat, lng]);
-    else setDestination([lat, lng]);
+    if (field === 'origin') { setOrigin([lat, lng]); setOriginLabel(label); }
+    else { setDestination([lat, lng]); setDestLabel(label); }
   };
 
   const handleClearField = (field: 'origin' | 'destination') => {
     resetResults();
-    if (field === 'origin') setOrigin(null);
-    else setDestination(null);
+    if (field === 'origin') { setOrigin(null); setOriginLabel(''); }
+    else { setDestination(null); setDestLabel(''); }
   };
 
   const handleSelectAlt = useCallback((idx: number) => {
@@ -119,8 +166,16 @@ export default function App() {
     if (origin && destination) doFindRoute(origin, destination, mode, 1000);
   }, [origin, destination, mode, doFindRoute]);
 
-  const clear = () => { setOrigin(null); setDestination(null); resetResults(); };
-  const swap = () => { setOrigin(destination); setDestination(origin); resetResults(); };
+  const clear = () => {
+    setOrigin(null); setDestination(null);
+    setOriginLabel(''); setDestLabel('');
+    resetResults();
+  };
+  const swap = () => {
+    setOrigin(destination); setDestination(origin);
+    setOriginLabel(destLabel); setDestLabel(originLabel);
+    resetResults();
+  };
   const handleModeChange = (newMode: TransportMode) => {
     setMode(newMode);
     resetResults();
@@ -146,6 +201,10 @@ export default function App() {
       <Sidebar
         origin={origin}
         destination={destination}
+        originLabel={originLabel}
+        destLabel={destLabel}
+        onOriginLabelChange={setOriginLabel}
+        onDestLabelChange={setDestLabel}
         route={route}
         transitAlts={transitAlts}
         loading={loading}
